@@ -28,7 +28,7 @@ from cmd_line.util import FormattedEventPrinter
 # TODO: also postgres
 WORK_DIR = '/home/%s/.nostrpy/' % Path.home().name
 DB_FILE = '%s/tmp.db' % WORK_DIR
-RELAYS = ['wss://relay.damus.io']
+RELAYS = ['wss://nostr-pub.wellorder.net']
 
 def usage():
     print("""
@@ -60,7 +60,13 @@ def get_from_config(config,
     # user we're viewing as
     if config['as_user'] is not None:
         as_key = config['as_user']
+        # not supporting hex to avoid risk of querying for priv key as hex
+        if not Keys.is_bech32_key(as_key):
+            raise ConfigException('%s doesn\'t look like a nsec/npub nostr key' % as_key)
+        as_key = Keys.get_key(as_key).public_key_hex()
+
         as_user = profile_handler.get_profile(as_key)
+        print(as_user)
 
         if not as_user:
             raise ConfigException('unable to find/create as_user profile - %s' % as_key)
@@ -228,8 +234,13 @@ def run_watch(config):
             print('events will be displayed as user %s' % as_user.display_name())
             print('--- follows ---')
 
-            for c_c in as_user.load_contacts(profile_store):
-                c_p = profile_handler.profiles.get_profile(c_c.contact_public_key)
+            # this will group fetch all follow profiles so they won't be fetch individually
+            # when we list
+            profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
+                                         create_missing=True)
+
+            for c_c in as_user.contacts:
+                c_p = profile_handler.get_profile(c_c.contact_public_key)
                 if c_p:
                     print(c_p.display_name())
                 else:
