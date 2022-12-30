@@ -146,7 +146,6 @@ class Keys:
             self._priv_k = k_pair['priv_k']
             self._pub_k = k_pair['pub_k']
         elif priv_k:
-            print('check', priv_k)
             if Keys.is_bech32_key(priv_k):
                 if priv_k.startswith('npub'):
                     raise Exception('attempt to use npub as private key!!')

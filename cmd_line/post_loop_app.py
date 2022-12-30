@@ -2,7 +2,6 @@
     prompt_toolkit front end to from app.post import PostApp
 
 """
-import logging
 
 from prompt_toolkit import Application
 from prompt_toolkit.layout import Layout, ScrollablePane
@@ -10,9 +9,9 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.key_binding import KeyBindings
-from nostr.ident.event_handlers import ProfileEventHandler
-from nostr.event.event import Event
-from nostr.util import util_funcs
+from monstr.ident.event_handlers import ProfileEventHandler
+from monstr.event.event import Event
+from monstr.util import util_funcs
 from app.post import PostApp
 import os
 

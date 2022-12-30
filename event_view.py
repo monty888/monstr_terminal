@@ -24,11 +24,12 @@ from monstr.event.event import Event
 from monstr.encrypt import Keys
 from app.post import PostApp
 from cmd_line.util import FormattedEventPrinter
+from exception import ConfigException
 
 # TODO: also postgres
 WORK_DIR = '/home/%s/.nostrpy/' % Path.home().name
 DB_FILE = '%s/tmp.db' % WORK_DIR
-RELAYS = ['wss://nostr-pub.wellorder.net']
+RELAYS = ['ws://localhost:8888']
 
 def usage():
     print("""
@@ -45,9 +46,6 @@ usage:
     sys.exit(2)
 
 
-class ConfigException(Exception):
-    pass
-
 def get_from_config(config,
                     profile_handler: ProfileEventHandlerInterface):
     as_user = None
@@ -63,10 +61,12 @@ def get_from_config(config,
         # not supporting hex to avoid risk of querying for priv key as hex
         if not Keys.is_bech32_key(as_key):
             raise ConfigException('%s doesn\'t look like a nsec/npub nostr key' % as_key)
-        as_key = Keys.get_key(as_key).public_key_hex()
 
-        as_user = profile_handler.get_profile(as_key)
-        print(as_user)
+        user_keys = Keys.get_key(as_key)
+        as_user = profile_handler.get_profile(user_keys.public_key_hex())
+        # if we were given a private key then we'll attach it to the profile so it can decode msgs
+        if user_keys.private_key_hex():
+            as_user.private_key = user_keys.private_key_hex()
 
         if not as_user:
             raise ConfigException('unable to find/create as_user profile - %s' % as_key)
@@ -183,7 +183,7 @@ class MyAccept(EventAccepter):
 
 def run_watch(config):
     my_client: Client
-
+    relay = config['relay']
     # hack so that there is always a connection to the in mem db else it'll get closed
     # import sqlite3
     # db_keep_ref = sqlite3.connect('file:profile?mode=memory&cache=shared&uri=true')
@@ -196,7 +196,7 @@ def run_watch(config):
     profile_store = MemoryProfileStore()
 
     # connection thats just used to query profiles as needed
-    profile_client = ClientPool(RELAYS)
+    profile_client = ClientPool(relay)
     profile_handler = NetworkedProfileEventHandler(client=profile_client,
                                                    cache=TTLCache(1000, 60*30))
 
@@ -336,7 +336,7 @@ def run_watch(config):
 
     my_printer.display_func = my_display
 
-    ClientPool(RELAYS, on_connect=my_connect, on_eose=my_eose).start()
+    ClientPool(relay, on_connect=my_connect, on_eose=my_eose).start()
 
 
 
@@ -346,16 +346,18 @@ def run_event_view():
         'view_profiles': None,
         'inbox': None,
         'since': 6,
-        'until': None
+        'until': None,
+        'relay': RELAYS
     }
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'h', ['help',
-                                                       'as_profile=',
-                                                       'view_profiles=',
-                                                       'inbox=',
-                                                       'since=',
-                                                       'until='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hr:', ['help',
+                                                         'as_profile=',
+                                                         'view_profiles=',
+                                                         'inbox=',
+                                                         'since=',
+                                                         'until=',
+                                                         'relay='])
 
         # attempt interpret action
         for o, a in opts:
@@ -371,6 +373,8 @@ def run_event_view():
                 config['since'] = a
             if o == '--until':
                 config['until'] = a
+            if o in ('-r', '--relay'):
+                config['relay'] = a.split(',')
 
         run_watch(config)
 
@@ -380,7 +384,7 @@ def run_event_view():
 
 
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.INFO)
+    # logging.getLogger().setLevel(logging.INFO)
     util_funcs.create_work_dir(WORK_DIR)
     util_funcs.create_sqlite_store(DB_FILE)
     run_event_view()

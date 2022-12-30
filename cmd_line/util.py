@@ -216,16 +216,15 @@ class FormattedEventPrinter:
         return ret
 
     def _get_decode_event_content(self, evt):
-        could_decode = True
+        could_decode = False
         def nip_decode(the_evt: Event):
             pub_key = evt.p_tags[0]
             if pub_key == self._as_user.public_key:
                 pub_key = evt.pub_key
-
             return evt.decrypted_content(self._as_user.private_key, pub_key)
 
         if evt.kind == Event.KIND_TEXT_NOTE:
-            # print(self.tag_substitution(evt.content, [evt.pub_key] + evt.p_tags))
+            could_decode = True
             content = evt.content
         elif evt.kind == Event.KIND_ENCRYPT:
             content = evt.content
@@ -233,6 +232,7 @@ class FormattedEventPrinter:
                 # basic NIP4 encrypted event from/to us
                 if evt.pub_key == self._as_user.public_key or self._as_user.public_key in evt.p_tags:
                     content = nip_decode(evt)
+                    could_decode = True
                 # clust style wrapped NIP4 event
                 elif evt.pub_key in self._inbox_keys:
                     evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys)
@@ -242,6 +242,7 @@ class FormattedEventPrinter:
                         print('wrapped evt-->')
                         self.print_event_header(evt, depth=1)
                         content = '\t' + nip_decode(evt)
+                        could_decode = True
 
             except:
                 could_decode = False
