@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 #     from nostr.ident.profile import
 
 from monstr.event.event import Event
+from monstr.encrypt import Keys
 from app.post import PostApp
 from monstr.ident.profile import ProfileList, Profile
 from monstr.ident.event_handlers import ProfileEventHandler
@@ -73,6 +74,7 @@ class EventPrinter:
                     content = nip_decode(evt)
                 # clust style wrapped NIP4 event
                 elif evt.pub_key in self._inbox_keys:
+                    print(self._share_keys,'<<<<<<<<')
                     evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys)
                     if evt:
                         self.print_event_header(evt, depth=1)
@@ -88,17 +90,25 @@ class FormattedEventPrinter:
     def __init__(self,
                  profile_handler: ProfileEventHandler,
                  as_user: Profile = None,
-                 inbox_keys=None,
+                 inbox_keys: [Keys] =None,
                  share_keys=None):
 
         self._profile_handler = profile_handler
         self._as_user = as_user
-        self._inbox_keys = inbox_keys
-        if inbox_keys is None:
-            self._inbox_keys = []
+
+        self._inbox_map = {}
+        self._inbox_view_keys = {}
+        self._inbox_decode_map = {}
+
+        k: Keys
+        if inbox_keys:
+            self._inbox_view_keys = {k.public_key_hex() for k in inbox_keys}
+            self._inbox_decode_map = {k.public_key_hex(): k.private_key_hex() for k in inbox_keys}
+
         self._share_keys = share_keys
+
         if share_keys is None:
-            self._share_keys = []
+            self._share_keys = {}
 
         self._as_user_color = 'green'
         self._other_user_key = 'green'
@@ -230,18 +240,24 @@ class FormattedEventPrinter:
             content = evt.content
             try:
                 # basic NIP4 encrypted event from/to us
-                if evt.pub_key == self._as_user.public_key or self._as_user.public_key in evt.p_tags:
+                if self._as_user and \
+                        (evt.pub_key == self._as_user.public_key or
+                         self._as_user.public_key in evt.p_tags):
                     content = nip_decode(evt)
                     could_decode = True
                 # clust style wrapped NIP4 event
-                elif evt.pub_key in self._inbox_keys:
-                    evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys)
-
+                elif evt.pub_key in self._inbox_view_keys:
+                    evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys, self._inbox_decode_map)
                     if evt:
                         # printing here is confusing, should just be decoding...
-                        print('wrapped evt-->')
-                        self.print_event_header(evt, depth=1)
-                        content = '\t' + nip_decode(evt)
+                        if evt.kind == Event.KIND_ENCRYPT:
+                            print('encrypted evt in inbox-->')
+                            self.print_event_header(evt, depth=1)
+                            content = '\t' + nip_decode(evt)
+                        else:
+                            print('plaintext evt in inbox-->')
+                            self.print_event_header(evt, depth=1)
+                            content = '\t' + evt.content
                         could_decode = True
 
             except:

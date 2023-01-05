@@ -38,12 +38,36 @@ usage:
 --as_profile                profile_name, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                             encrypted events will be left encrypted.
 --view_profiles             comma seperated list of profile_name or pub_k that will be included for view
---inbox                     profile_name or priv_k of mailbox to check for CLUST wrapped messages
+-v, --via                   nsec key to use as encrypted inbox 
 --since                     show events n hours previous to running - default 24
 --until                     show events n hours after since    
 
     """)
     sys.exit(2)
+
+
+def get_profiles_from_keys(keys: str, private_only=False, single_only=False) -> [Keys]:
+    """
+    :param keys:            , seperated nsec/npub
+    :param private_only:    only accept nsec
+    :param single_only:     only a single key
+    :return:
+    """
+    if single_only:
+        keys = [keys]
+    else:
+        keys = keys.split(',')
+
+    ret = []
+    for c_key in keys:
+        # maybe have flag to allow hex keys but for now just nsec/npub as it's so easy to leak the priv_k otherwise!
+        if not Keys.is_bech32_key(c_key):
+            raise ConfigException('%s doesn\'t look like a nsec/npub nostr key' % c_key)
+        the_key = Keys.get_key(c_key)
+        if private_only and the_key.private_key_hex() is None:
+            raise ConfigException('%s is not a private key' % c_key)
+        ret.append(the_key)
+    return ret
 
 
 def get_from_config(config,
@@ -57,19 +81,18 @@ def get_from_config(config,
 
     # user we're viewing as
     if config['as_user'] is not None:
-        as_key = config['as_user']
-        # not supporting hex to avoid risk of querying for priv key as hex
-        if not Keys.is_bech32_key(as_key):
-            raise ConfigException('%s doesn\'t look like a nsec/npub nostr key' % as_key)
+        user_key = get_profiles_from_keys(config['as_user'],
+                                          private_only=False,
+                                          single_only=True)[0]
 
-        user_keys = Keys.get_key(as_key)
-        as_user = profile_handler.get_profile(user_keys.public_key_hex())
+        as_user = profile_handler.get_profile(user_key.public_key_hex(),
+                                              create_missing=True)
         # if we were given a private key then we'll attach it to the profile so it can decode msgs
-        if user_keys.private_key_hex():
-            as_user.private_key = user_keys.private_key_hex()
+        if user_key.private_key_hex():
+            as_user.private_key = user_key.private_key_hex()
 
         if not as_user:
-            raise ConfigException('unable to find/create as_user profile - %s' % as_key)
+            raise ConfigException('unable to find/create as_user profile - %s' % config['as_user'])
 
         c_c: Contact
         contacts = profile_handler.load_contacts(as_user)
@@ -81,29 +104,29 @@ def get_from_config(config,
 
     # addtional profiles to view other than current profile
     if config['view_profiles']:
-        vps = config['view_profiles'].split(',')
+        view_keys = get_profiles_from_keys(config['view_profiles'],
+                                           private_only=False,
+                                           single_only=False)
 
-        view_ps = profile_handler.get_profiles(pub_ks=vps,
-                                               create_missing=False)
+        view_ps = profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
+                                               create_missing=True)
+
         all_view = all_view + view_ps.profiles
         view_extra = view_ps.profiles
 
     # public inboxes for encrypted messages
-    if config['inbox']:
-        if as_user is None:
-            raise ConfigException('inbox can only be used with as_user set')
-        raise ConfigException('add this back in!!!')
-        # for c_box in config['inbox'].split(','):
-        #     p = profiles.profiles.get_profile(c_box,
-        #                                       create_type=ProfileList.CREATE_PRIVATE)
-        #     if not p:
-        #         print('unable to find/create inbox_profile - %s' % c_box)
-        #         sys.exit(2)
-        #     else:
-        #         inboxes.append(p)
-        #         inbox_keys.append(p.public_key)
+    if config['via']:
+        # NOTE without as_user we can only see plain texts in this account
+        # if as_user is None:
+        #     raise ConfigException('inbox can only be used with as_user set')
 
+        inbox_keys = get_profiles_from_keys(config['via'],
+                                            private_only=True,
+                                            single_only=False)
 
+        inboxes = profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
+                                               create_missing=True).profiles
+        all_view = all_view + inboxes
 
     if as_user is not None and as_user.private_key:
         shared_keys = PostApp.get_clust_shared_keymap_for_profile(as_user, all_view)
@@ -197,12 +220,19 @@ def run_watch(config):
 
     # connection thats just used to query profiles as needed
     profile_client = ClientPool(relay)
+    profile_client.start()
+
+    # note this is only waiting for at least one relay to connect, maybe add a wait options
+    # to give time for slower relays to connect?
+    while not profile_client.connected:
+        time.sleep(0.1)
+
     profile_handler = NetworkedProfileEventHandler(client=profile_client,
                                                    cache=TTLCache(1000, 60*30))
 
     # profile_handler = ProfileEventHandler(cache=TTLCache(1000, 60 * 30))
 
-    profile_client.start()
+
 
     # pop the config
     try:
@@ -336,6 +366,7 @@ def run_watch(config):
 
     my_printer.display_func = my_display
 
+    profile_client.end()
     ClientPool(relay, on_connect=my_connect, on_eose=my_eose).start()
 
 
@@ -344,20 +375,20 @@ def run_event_view():
     config = {
         'as_user': None,
         'view_profiles': None,
-        'inbox': None,
+        'via': None,
         'since': 6,
         'until': None,
         'relay': RELAYS
     }
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hr:', ['help',
-                                                         'as_profile=',
-                                                         'view_profiles=',
-                                                         'inbox=',
-                                                         'since=',
-                                                         'until=',
-                                                         'relay='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hr:v:', ['help',
+                                                           'as_profile=',
+                                                           'view_profiles=',
+                                                           'via=',
+                                                           'since=',
+                                                           'until=',
+                                                           'relay='])
 
         # attempt interpret action
         for o, a in opts:
@@ -367,8 +398,8 @@ def run_event_view():
                 config['as_user'] = a
             if o == '--view_profiles':
                 config['view_profiles'] = a
-            if o == '--inbox':
-                config['inbox'] = a
+            if o in ('-v', '--via'):
+                config['via'] = a
             if o == '--since':
                 config['since'] = a
             if o == '--until':

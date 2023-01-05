@@ -153,7 +153,7 @@ class NetworkedProfileEventHandler(ProfileEventHandler):
             # note this means data will be return as quick as your slowest relay...
             emulate_single=True)
 
-        Event.latest_events_only(meta_events, kind=Event.KIND_META)
+        meta_events = Event.latest_events_only(meta_events, kind=Event.KIND_META)
         return [Profile.from_event(evt) for evt in meta_events]
 
     def _fetch_contacts(self, pub_ks) -> [ContactList]:
@@ -225,4 +225,5 @@ class NetworkedProfileEventHandler(ProfileEventHandler):
             p.contacts = p_contacts[0]
         # couldn't find any?
         else:
-            p_contacts = None
+            p.contacts = ContactList(contacts=[],
+                                     owner_pub_k=p.public_key)

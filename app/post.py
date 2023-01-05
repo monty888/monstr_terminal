@@ -23,6 +23,7 @@ class PostApp:
         :param to_users: [] either of pubkeys or Profiles
         :return:
         """
+        print(as_user.public_key)
         se = SharedEncrypt(as_user.private_key)
 
         ret = {PostApp.get_clust_shared(se.derive_shared_key(as_user.public_key)): as_user.public_key}
@@ -39,15 +40,24 @@ class PostApp:
         return ret
 
     @staticmethod
-    def clust_unwrap_event(evt: Event, as_user: Profile, shared_keys_map):
+    def clust_unwrap_event(evt: Event, as_user: Profile, shared_keys_map: set, inbox_decode_map: dict):
         ret = None
         shared_tags = evt.get_tags('shared')
         if shared_tags and shared_tags[0][0] in shared_keys_map:
             try:
                 content = evt.decrypted_content(as_user.private_key, shared_keys_map[shared_tags[0][0]])
-                ret = Event.create_from_JSON(json.loads(content))
+                ret = Event.from_JSON(json.loads(content))
             except Exception as e:
                 pass
+        else:
+            # is just a plain text in a public inbox? anyone with the private key to the inbox can see it
+            try:
+                decode_key = inbox_decode_map[evt.pub_key]
+                content = evt.decrypted_content(decode_key, evt.pub_key)
+                ret = Event.from_JSON(json.loads(content))
+            except Exception as e:
+                pass
+
         return ret
 
     def __init__(self,
@@ -200,7 +210,10 @@ class PostApp:
         :param subject:
         :return:
         """
-        tags = [['p', p.public_key] for p in self._to_users]
+
+        tags = []
+        if self._to_users:
+            tags = [['p', p.public_key] for p in self._to_users]
 
         if self._subject is not None:
             tags.append(['subject', self._subject])
@@ -215,6 +228,7 @@ class PostApp:
             if self._public_inbox:
                 evt = self._inbox_wrap(evt)
             post = [evt]
+
         else:
             post = []
             for c_post in tags:

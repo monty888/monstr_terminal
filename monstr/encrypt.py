@@ -179,6 +179,7 @@ class Keys:
             ret = self.hex_to_bech32(self._pub_k)
         return ret
 
+
 class SharedEncrypt:
 
     def __init__(self, priv_k_hex):

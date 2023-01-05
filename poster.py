@@ -39,19 +39,12 @@ usage:
     """)
     sys.exit(2)
 
-def do_post(client: Client,
-            post_app: PostApp,
-            msg):
-
-    client.start()
-    while not post_app.connection_status:
-        time.sleep(0.2)
-    post_app.do_post(msg)
-    client.end()
-
 
 def show_post_info(as_user: Profile,
-                   msg, to_users, is_encrypt, subject,
+                   msg:str,
+                   to_users: [Profile],
+                   is_encrypt: bool,
+                   subject: str,
                    public_inbox: Profile):
     if msg is None:
         msg = '<no msg supplied>'
@@ -116,10 +109,12 @@ def get_options():
                 ret['is_encrypt'] = False
             elif o in ('-s', '--subject'):
                 ret['subject'] = a
+            elif o in ('-v', '--via'):
+                ret['inbox'] = a
             elif o in ('-l', '--loop'):
                 ret['loop'] = True
 
-        if ret['user'] is None and len(args) > 0:
+        if ret['user'] is None and len(args) > 1:
             ret['user'] = args.pop(0)
         if args:
             ret['message'] = ' '.join(args)
@@ -128,6 +123,22 @@ def get_options():
         print(e)
         usage()
 
+    return ret
+
+
+def create_key(key_val:str, for_desc: str):
+    try:
+        ret = Keys.get_key(key_val)
+        if ret is None:
+            raise Exception()
+
+    except Exception as e:
+        raise ConfigException('unable to create %s keys using - %s' % (for_desc,
+                                                                       key_val))
+
+    if ret.private_key_hex() is None:
+        raise ConfigException('unable to create %s private keys using - %s' % (for_desc,
+                                                                               key_val))
     return ret
 
 
@@ -140,16 +151,7 @@ def get_user_keys(user: str) -> Keys:
         print('created adhoc key - %s/%s' % (ret.public_key_hex(),
                                              ret.public_key_bech32()))
     else:
-        try:
-            ret = Keys.get_key(user)
-            if ret is None:
-                raise Exception()
-
-        except Exception as e:
-            raise ConfigException('unable to create keys using - %s' % user)
-
-        if ret.private_key_hex() is None:
-            raise ConfigException('unable to create private keys using - %s' % user)
+        ret = create_key(user, 'user')
 
     return ret
 
@@ -165,9 +167,9 @@ def get_to_keys(to_users: [str], ignore_missing: bool) -> [Keys]:
                 ret.append(cu_key)
             except Exception as e:
                 if ignore_missing:
-                    logging.info('unable to create keys for to user using - %s - ignoring' % c_to)
+                    logging.info('unable to create keys for to_user using - %s - ignoring' % c_to)
                 else:
-                    raise ConfigException('unable to create keys for to user using - %s' % c_to)
+                    raise ConfigException('unable to create keys for to_user using - %s' % c_to)
 
         if not ret:
             raise ConfigException('unable to create any to user keys!')
@@ -175,10 +177,49 @@ def get_to_keys(to_users: [str], ignore_missing: bool) -> [Keys]:
     return ret
 
 
+def get_inbox_keys(inbox: str) -> Keys:
+    if inbox is None:
+        return
+    return create_key(inbox, 'user')
+
+
+def create_post_event(user: Keys,
+                      is_encrypt: bool,
+                      subject: str,
+                      to_users: [Keys],
+                      inbox: str,
+                      message: str):
+
+    kind = Event.KIND_ENCRYPT
+    if not is_encrypt:
+        kind = Event.KIND_TEXT_NOTE
+
+    ret = Event(kind=kind,
+                pub_key=user.public_key_hex(),
+                content=message)
+
+    if is_encrypt:
+        ret.content = ret.encrypt_content(priv_key=user.private_key_hex(),
+                                          pub_key=to_users[0].public_key_hex())
+
+    evt_tags = []
+    if subject:
+        evt_tags.append(['subject', subject])
+    if to_users:
+        evt_tags = evt_tags + [['p', k.public_key_hex()] for k in to_users]
+
+    ret.tags = evt_tags
+
+    if inbox:
+        pass
+
+    return ret
+
+
 def post_single(relays: [str],
-                user: Keys,
-                to_users: Keys,
-                inbox: Keys,
+                user_k: Keys,
+                to_users_k: Keys,
+                inbox_k: Keys,
                 is_encrypt: bool,
                 subject: str,
                 message: str):
@@ -186,48 +227,52 @@ def post_single(relays: [str],
     k: Keys
 
     with ClientPool(relays) as c:
-        # bit hacky... connected means only that we're connected to atleast 1 of the relays in the pool
-        # when we publish theirs no guarantee that post will make it to all relays...
-        while c.connected is False:
-            time.sleep(0.1)
+        # get profiles of from/to if we can
+        peh = NetworkedProfileEventHandler(client=c, cache=TTLCache(maxsize=10000,
 
-        to_post = []
+                                                                    ttl=60*60*24))
+        # make list of p keys we need
+        p_to_fetch = [user_k.public_key_hex()]
+        if to_users_k:
+            p_to_fetch = p_to_fetch + [k.public_key_hex() for k in to_users_k]
+        if inbox_k:
+            p_to_fetch = p_to_fetch + [inbox_k.public_key_hex()]
 
-        if is_encrypt:
-            for k in to_users:
-                post_event = Event(kind=Event.KIND_ENCRYPT,
-                                   pub_key=user.public_key_hex(),
-                                   content=message)
-                evt_tags = [['p', k.public_key_hex()]]
-                if subject:
-                    evt_tags.append(['subject', subject])
-                post_event.tags = evt_tags
+        # pre-fetch them, creating stubs for any we didn't find
+        peh.get_profiles(pub_ks=p_to_fetch, create_missing=True)
 
-                post_event.content = post_event.encrypt_content(priv_key=user.private_key_hex(),
-                                                                pub_key=k.public_key_hex())
-                to_post.append(post_event)
+        # get the sending user profile
+        user_p = peh.get_profile(pub_k=user_k.public_key_hex())
+        # because relay doesn't know the private key
+        user_p.private_key = user_k.private_key_hex()
 
-        else:
-            post_event = Event(kind=Event.KIND_TEXT_NOTE,
-                               pub_key=user.public_key_hex(),
-                               content=message)
+        # and for the inbox, normally we wouldn't expect this to have a profile
+        inbox_p = None
+        if inbox_k:
+            inbox_p = peh.get_profile(inbox_k.public_key_hex())
+            # again the relay wouldn't know this
+            inbox_p.private_key = inbox_k.private_key_hex()
 
-            evt_tags = []
-            if subject:
-                evt_tags.append(['subject', subject])
-            if to_users:
-                evt_tags = evt_tags + [['p', k.public_key_hex()] for k in to_users]
+        # get the to users profile if any
+        to_users_p = None
+        if to_users_k:
+            to_users_p = peh.get_profiles([k.public_key_hex() for k in to_users_k])
 
-            post_event.tags = evt_tags
+        show_post_info(as_user=user_p,
+                       to_users=to_users_p,
+                       is_encrypt=is_encrypt,
+                       subject=subject,
+                       public_inbox=inbox_p,
+                       msg=message)
 
-            to_post.append(post_event)
-
-        c_evt: Event
-        for c_evt in to_post:
-            c_evt.sign(user.private_key_hex())
-            c.publish(c_evt)
-
-
+        print(inbox_p)
+        post_app = PostApp(use_relay=c,
+                           as_user=user_p,
+                           to_users=to_users_p,
+                           public_inbox=inbox_p,
+                           subject=subject,
+                           is_encrypt=is_encrypt)
+        post_app.do_post(msg=message)
 
 
 
@@ -235,6 +280,7 @@ def run_post():
     opts = get_options()
     user = opts['user']
     to_users = opts['to_users']
+    inbox = opts['inbox']
     ignore_missing = opts['ignore_missing']
     loop = opts['loop']
     message = opts['message']
@@ -250,11 +296,13 @@ def run_post():
 
         to_keys = get_to_keys(to_users, ignore_missing)
 
+        inbox_keys = get_inbox_keys(inbox)
+
         if opts['loop'] is False:
             post_single(relays=opts['relay'],
-                        user=user_keys,
-                        to_users=to_keys,
-                        inbox=None,
+                        user_k=user_keys,
+                        to_users_k=to_keys,
+                        inbox_k=inbox_keys,
                         is_encrypt=opts['is_encrypt'],
                         subject=opts['subject'],
                         message=opts['message']
