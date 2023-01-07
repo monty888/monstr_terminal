@@ -74,7 +74,6 @@ class EventPrinter:
                     content = nip_decode(evt)
                 # clust style wrapped NIP4 event
                 elif evt.pub_key in self._inbox_keys:
-                    print(self._share_keys,'<<<<<<<<')
                     evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys)
                     if evt:
                         self.print_event_header(evt, depth=1)
@@ -227,11 +226,12 @@ class FormattedEventPrinter:
 
     def _get_decode_event_content(self, evt):
         could_decode = False
+
         def nip_decode(the_evt: Event):
-            pub_key = evt.p_tags[0]
+            pub_key = the_evt.p_tags[0]
             if pub_key == self._as_user.public_key:
-                pub_key = evt.pub_key
-            return evt.decrypted_content(self._as_user.private_key, pub_key)
+                pub_key = the_evt.pub_key
+            return the_evt.decrypted_content(self._as_user.private_key, pub_key)
 
         if evt.kind == Event.KIND_TEXT_NOTE:
             could_decode = True
@@ -247,18 +247,23 @@ class FormattedEventPrinter:
                     could_decode = True
                 # clust style wrapped NIP4 event
                 elif evt.pub_key in self._inbox_view_keys:
-                    evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys, self._inbox_decode_map)
-                    if evt:
+                    inbox_p: Profile = self._get_profile(key=evt.pub_key)
+                    unwrapped_evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys, self._inbox_decode_map)
+                    if unwrapped_evt:
                         # printing here is confusing, should just be decoding...
-                        if evt.kind == Event.KIND_ENCRYPT:
-                            print('encrypted evt in inbox-->')
-                            self.print_event_header(evt, depth=1)
-                            content = '\t' + nip_decode(evt)
+
+                        if unwrapped_evt.kind == Event.KIND_ENCRYPT:
+                            print('\tencrypted evt in inbox(%s)-->' % inbox_p.display_name())
+                            self.print_event_header(unwrapped_evt, depth=1)
+                            content = '\t' + nip_decode(unwrapped_evt)
                         else:
-                            print('plaintext evt in inbox-->')
-                            self.print_event_header(evt, depth=1)
-                            content = '\t' + evt.content
+                            print('\tplaintext evt in inbox(%s)-->' % inbox_p.display_name())
+                            self.print_event_header(unwrapped_evt, depth=1)
+                            content = '\t' + unwrapped_evt.content
                         could_decode = True
+                    else:
+                        print('\tencrypted evt in - inbox(%s) unable to decode-->' % inbox_p.display_name())
+                        content = '\t' + content
 
             except:
                 could_decode = False

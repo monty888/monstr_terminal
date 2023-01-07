@@ -82,22 +82,25 @@ def get_options():
     }
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'ha:t:piles:r:e:v:', ['help',
-                                                                       'relay=',
-                                                                       'as_profile=',
-                                                                       'plain_text',
-                                                                       'to=',
-                                                                       'via=',
-                                                                       'ignore_missing',
-                                                                       'loop',
-                                                                       'subject=',
-                                                                       'event='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hda:t:piles:r:e:v:', ['help',
+                                                                        'debug',
+                                                                        'relay=',
+                                                                        'as_profile=',
+                                                                        'plain_text',
+                                                                        'to=',
+                                                                        'via=',
+                                                                        'ignore_missing',
+                                                                        'loop',
+                                                                        'subject=',
+                                                                        'event='])
 
         # attempt interpret action
         for o, a in opts:
             if o in ('-h', '--help'):
                 usage()
-            if o in ('-i', '--ignore_missing'):
+            elif o in ('-d', '--debug'):
+                logging.getLogger().setLevel(logging.DEBUG)
+            elif o in ('-i', '--ignore_missing'):
                 ret['ignore_missing'] = True
             elif o in ('-a', '--as_profile'):
                 ret['user'] = a
@@ -216,6 +219,57 @@ def create_post_event(user: Keys,
     return ret
 
 
+def get_poster(client: Client,
+               user_k: Keys,
+               to_users_k: Keys,
+               inbox_k: Keys,
+               is_encrypt: bool,
+               subject: str):
+    k: Keys
+
+    # get profiles of from/to if we can
+    peh = NetworkedProfileEventHandler(client=client)
+    # make list of p keys we need
+    p_to_fetch = [user_k.public_key_hex()]
+    if to_users_k:
+        p_to_fetch = p_to_fetch + [k.public_key_hex() for k in to_users_k]
+    if inbox_k:
+        p_to_fetch = p_to_fetch + [inbox_k.public_key_hex()]
+
+    # pre-fetch them, creating stubs for any we didn't find
+    peh.get_profiles(pub_ks=p_to_fetch, create_missing=True)
+
+    # get the sending user profile
+    user_p = peh.get_profile(pub_k=user_k.public_key_hex())
+    # because relay doesn't know the private key
+    user_p.private_key = user_k.private_key_hex()
+
+    # and for the inbox, normally we wouldn't expect this to have a profile
+    inbox_p = None
+    if inbox_k:
+        inbox_p = peh.get_profile(inbox_k.public_key_hex())
+        # again the relay wouldn't know this
+        inbox_p.private_key = inbox_k.private_key_hex()
+
+    # get the to users profile if any
+    to_users_p = None
+    if to_users_k:
+        to_users_p = peh.get_profiles([k.public_key_hex() for k in to_users_k])
+
+    post_app = PostApp(use_relay=client,
+                       as_user=user_p,
+                       to_users=to_users_p,
+                       public_inbox=inbox_p,
+                       subject=subject,
+                       is_encrypt=is_encrypt)
+    return {
+        'post_app': post_app,
+        'user': user_p,
+        'to_users': to_users_p,
+        'inboxes': inbox_p
+    }
+
+
 def post_single(relays: [str],
                 user_k: Keys,
                 to_users_k: Keys,
@@ -224,55 +278,79 @@ def post_single(relays: [str],
                 subject: str,
                 message: str):
 
-    k: Keys
+    with ClientPool(relays) as client:
+        post_env = get_poster(client=client,
+                              user_k=user_k,
+                              to_users_k=to_users_k,
+                              inbox_k=inbox_k,
+                              is_encrypt=is_encrypt,
+                              subject=subject)
 
-    with ClientPool(relays) as c:
-        # get profiles of from/to if we can
-        peh = NetworkedProfileEventHandler(client=c, cache=TTLCache(maxsize=10000,
+        post_app: PostApp = post_env['post_app']
+        user: Profile = post_env['user']
+        to_users: [Profile] = post_env['to_users']
+        inboxes: [Profile] = post_env['inboxes']
 
-                                                                    ttl=60*60*24))
-        # make list of p keys we need
-        p_to_fetch = [user_k.public_key_hex()]
-        if to_users_k:
-            p_to_fetch = p_to_fetch + [k.public_key_hex() for k in to_users_k]
-        if inbox_k:
-            p_to_fetch = p_to_fetch + [inbox_k.public_key_hex()]
-
-        # pre-fetch them, creating stubs for any we didn't find
-        peh.get_profiles(pub_ks=p_to_fetch, create_missing=True)
-
-        # get the sending user profile
-        user_p = peh.get_profile(pub_k=user_k.public_key_hex())
-        # because relay doesn't know the private key
-        user_p.private_key = user_k.private_key_hex()
-
-        # and for the inbox, normally we wouldn't expect this to have a profile
-        inbox_p = None
-        if inbox_k:
-            inbox_p = peh.get_profile(inbox_k.public_key_hex())
-            # again the relay wouldn't know this
-            inbox_p.private_key = inbox_k.private_key_hex()
-
-        # get the to users profile if any
-        to_users_p = None
-        if to_users_k:
-            to_users_p = peh.get_profiles([k.public_key_hex() for k in to_users_k])
-
-        show_post_info(as_user=user_p,
-                       to_users=to_users_p,
+        show_post_info(as_user=user,
+                       to_users=to_users,
                        is_encrypt=is_encrypt,
                        subject=subject,
-                       public_inbox=inbox_p,
+                       public_inbox=inboxes,
                        msg=message)
 
-        print(inbox_p)
-        post_app = PostApp(use_relay=c,
-                           as_user=user_p,
-                           to_users=to_users_p,
-                           public_inbox=inbox_p,
-                           subject=subject,
-                           is_encrypt=is_encrypt)
         post_app.do_post(msg=message)
+
+
+def post_loop(relays: [str],
+              user_k: Keys,
+              to_users_k: Keys,
+              inbox_k: Keys,
+              is_encrypt: bool,
+              subject: str):
+
+    sub_id: str = None
+    con_status = None
+
+    kinds = Event.KIND_ENCRYPT
+    if is_encrypt is False:
+        kinds = Event.KIND_TEXT_NOTE
+
+    def do_sub():
+        nonlocal sub_id
+
+        filter = {
+            'kinds': [kinds],
+            'limit': 1000
+        }
+        if subject:
+            filter['#subject'] = subject
+
+        sub_id = my_client.subscribe(handlers=[post_app],
+                                     filters=filter,
+                                     sub_id=sub_id)
+
+    def on_status(status):
+        nonlocal con_status
+        if con_status != status['connected']:
+            con_status = status['connected']
+            my_gui.draw_messages()
+
+    with ClientPool(relays) as my_client:
+        post_env = get_poster(client=my_client,
+                              user_k=user_k,
+                              to_users_k=to_users_k,
+                              inbox_k=inbox_k,
+                              is_encrypt=is_encrypt,
+                              subject=subject)
+        post_app: PostApp = post_env['post_app']
+        my_gui = PostAppGui(post_app,
+                            profile_handler=NetworkedProfileEventHandler(client=my_client))
+
+        my_client.set_status_listener(on_status)
+
+
+        do_sub()
+        my_gui.run()
 
 
 
@@ -307,7 +385,14 @@ def run_post():
                         subject=opts['subject'],
                         message=opts['message']
                         )
-
+        else:
+            post_loop(relays=opts['relay'],
+                      user_k=user_keys,
+                      to_users_k=to_keys,
+                      inbox_k=inbox_keys,
+                      is_encrypt=opts['is_encrypt'],
+                      subject=opts['subject']
+                      )
 
     except ConfigException as ce:
         print(ce)
@@ -316,6 +401,6 @@ def run_post():
 
 
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.FATAL)
     run_post()
 

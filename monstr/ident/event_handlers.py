@@ -4,11 +4,12 @@ if TYPE_CHECKING:
     from monstr.client.client import Client
 from datetime import datetime
 import logging
-import copy
+from cachetools import TTLCache, LRUCache
 from abc import ABC, abstractmethod
 from monstr.ident.profile import Profile, ProfileList, Keys, ContactList
 from monstr.event.event import Event
 from monstr.util import util_funcs
+
 
 class ProfileEventHandlerInterface(ABC):
 
@@ -67,7 +68,12 @@ class ProfileEventHandler(ProfileEventHandlerInterface):
         so they need to have been put there via the do_event method having been called
     """
 
-    def __init__(self, cache):
+    def __init__(self, cache=None):
+        # 10000 least recently used
+        # should be ok for most uses - better to use networked for most cases anyway
+        # unless maybe you want to control the fetches yourself
+        if cache is None:
+            cache = LRUCache(maxsize=10000)
         self._cache = cache
 
     def do_event(self, the_client: Client, sub_id: str, evts: Event):
@@ -129,8 +135,13 @@ class NetworkedProfileEventHandler(ProfileEventHandler):
     """
     def __init__(self,
                  client: Client,
-                 cache):
+                 cache=None):
         self._client = client
+        # default of 10000 with 1hr timeout at which point it'll go to the network
+        if cache is None:
+            cache = TTLCache(maxsize=10000,
+                             ttl=60*60)
+
         super().__init__(cache)
 
     def _fetch_profiles(self, pub_ks) -> [Profile]:

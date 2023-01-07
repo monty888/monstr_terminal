@@ -9,7 +9,7 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.key_binding import KeyBindings
-from monstr.ident.event_handlers import ProfileEventHandler
+from monstr.ident.event_handlers import ProfileEventHandlerInterface
 from monstr.event.event import Event
 from monstr.util import util_funcs
 from app.post import PostApp
@@ -20,7 +20,7 @@ class PostAppGui:
 
     def __init__(self,
                  post_app: PostApp,
-                 profile_handler: ProfileEventHandler):
+                 profile_handler: ProfileEventHandlerInterface):
         # gui parts
         self._post_app = post_app
         self._profile_handler = profile_handler
@@ -140,7 +140,8 @@ class PostAppGui:
             if content:
                 msg_height = len(content.split('\n'))
                 if self._profile_handler:
-                    msg_profile = self._profile_handler.profiles.lookup_pub_key(c_m.pub_key)
+                    msg_profile = self._profile_handler.get_profile(c_m.pub_key,
+                                                                    create_missing=True)
 
                 prompt_user_text = util_funcs.str_tails(c_m.pub_key, 4)
                 if msg_profile:

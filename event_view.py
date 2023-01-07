@@ -219,31 +219,26 @@ def run_watch(config):
     profile_store = MemoryProfileStore()
 
     # connection thats just used to query profiles as needed
-    profile_client = ClientPool(relay)
-    profile_client.start()
+    my_client = ClientPool(relay)
+    my_client.start()
 
     # note this is only waiting for at least one relay to connect, maybe add a wait options
     # to give time for slower relays to connect?
-    while not profile_client.connected:
+    while not my_client.connected:
         time.sleep(0.1)
 
-    profile_handler = NetworkedProfileEventHandler(client=profile_client,
-                                                   cache=TTLCache(1000, 60*30))
-
-    # profile_handler = ProfileEventHandler(cache=TTLCache(1000, 60 * 30))
-
-
+    profile_handler = NetworkedProfileEventHandler(client=my_client)
 
     # pop the config
     try:
         config = get_from_config(config, profile_handler)
     except ConfigException as ce:
         print(ce)
-        profile_client.end()
+        my_client.end()
         sys.exit(2)
     except Exception as e:
         print(e)
-        profile_client.end()
+        my_client.end()
         sys.exit(2)
 
     as_user = config['as_user']
@@ -366,8 +361,15 @@ def run_watch(config):
 
     my_printer.display_func = my_display
 
-    profile_client.end()
-    ClientPool(relay, on_connect=my_connect, on_eose=my_eose).start()
+    # hacky, fix this - is to force the my_connect to run... probably we should just add sub
+    # and in the my_connect add sub again
+    my_client.end()
+    my_client.set_on_connect(my_connect)
+    my_client.set_on_eose(my_eose)
+    my_client.start()
+
+
+    # profile_client.end()
 
 
 
@@ -382,13 +384,14 @@ def run_event_view():
     }
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hr:v:', ['help',
-                                                           'as_profile=',
-                                                           'view_profiles=',
-                                                           'via=',
-                                                           'since=',
-                                                           'until=',
-                                                           'relay='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hr:v:d', ['help',
+                                                            'as_profile=',
+                                                            'view_profiles=',
+                                                            'via=',
+                                                            'since=',
+                                                            'until=',
+                                                            'relay=',
+                                                            'debug'])
 
         # attempt interpret action
         for o, a in opts:
@@ -406,6 +409,8 @@ def run_event_view():
                 config['until'] = a
             if o in ('-r', '--relay'):
                 config['relay'] = a.split(',')
+            if o in ('-d', '--debug'):
+                logging.getLogger().setLevel(logging.DEBUG)
 
         run_watch(config)
 
@@ -415,7 +420,7 @@ def run_event_view():
 
 
 if __name__ == "__main__":
-    # logging.getLogger().setLevel(logging.INFO)
+    logging.getLogger().setLevel(logging.ERROR)
     util_funcs.create_work_dir(WORK_DIR)
     util_funcs.create_sqlite_store(DB_FILE)
     run_event_view()
