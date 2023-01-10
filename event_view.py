@@ -152,16 +152,15 @@ def get_from_config(config,
     try:
         since = int(config['since'])
     except ValueError as e:
-        print('since - %s not a numeric value' % config['since'])
+        raise ConfigException('since - %s not a numeric value' % config['since'])
+
 
     until = config['until']
     try:
         if config['until'] is not None:
             until = int(config['until'])
     except ValueError as e:
-        print('until - %s not a numeric value' % config['until'])
-        sys.exit(2)
-
+        raise ConfigException('until - %s not a numeric value' % config['until'])
 
     return {
         'as_user': as_user,
@@ -300,6 +299,9 @@ def run_watch(config):
     print_run_info()
     # change to since to point in time
     since = datetime.now() - timedelta(hours=since)
+
+    since_url = {}
+
     # same for util if it is a value, which is taken as hours from since
     if until:
         until = util_funcs.date_as_ticks(since + timedelta(hours=until))
@@ -330,6 +332,11 @@ def run_watch(config):
 
 
     def my_connect(the_client: Client):
+        # so on reconnect we don't ask for everthing again
+        use_since = since
+        if the_client.url in since_url:
+            use_since = since_url[the_client.url]
+
         # metas from now on
         p_filter = {
             'kinds': [Event.KIND_META],
@@ -338,7 +345,7 @@ def run_watch(config):
         # events back to since
         e_filter = {
             # 'since': event_store.get_newest(the_client.url)+1
-            'since': util_funcs.date_as_ticks(since),
+            'since': util_funcs.date_as_ticks(use_since),
             'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT]
         }
         if until:
@@ -350,6 +357,8 @@ def run_watch(config):
             p_filter,
             e_filter
         ])
+
+        since_url[the_client.url] = datetime.now()
 
     # prints out the events
     my_printer = PrintEventHandler(profile_handler=profile_handler,

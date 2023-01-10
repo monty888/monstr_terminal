@@ -354,24 +354,27 @@ def post_loop(relays: [str],
         for c_evt in evts:
             post_app.do_event(the_client,sub_id,c_evt)
 
-
-    with ClientPool(relays) as my_client:
-        peh = NetworkedProfileEventHandler(client=my_client)
-        post_env = get_poster(client=my_client,
-                              user_k=user_k,
-                              to_users_k=to_users_k,
-                              inbox_k=inbox_k,
-                              is_encrypt=is_encrypt,
-                              subject=subject)
-        post_app: PostApp = post_env['post_app']
-        my_gui = PostAppGui(post_app,
-                            profile_handler=peh)
-
-        my_client.set_status_listener(on_status)
-        my_client.set_on_eose(on_eose)
-
+    def on_connect(the_client: Client):
         do_sub()
-        my_gui.run()
+
+    my_client = ClientPool(relays)
+    peh = NetworkedProfileEventHandler(client=my_client)
+    post_env = get_poster(client=my_client,
+                          user_k=user_k,
+                          to_users_k=to_users_k,
+                          inbox_k=inbox_k,
+                          is_encrypt=is_encrypt,
+                          subject=subject)
+    post_app: PostApp = post_env['post_app']
+    my_gui = PostAppGui(post_app,
+                        profile_handler=peh)
+
+    my_client.set_status_listener(on_status)
+    my_client.set_on_eose(on_eose)
+    my_client.set_on_connect(on_connect)
+    my_client.start()
+    my_gui.run()
+    my_client.end()
 
 
 
