@@ -116,7 +116,8 @@ class Client:
                  on_eose=None,
                  read=True,
                  write=True,
-                 emulate_eose=True):
+                 emulate_eose=True,
+                 dispatcher=None):
         self._url = relay_url
         self._subs = {}
         self._run = False
@@ -134,7 +135,7 @@ class Client:
         # NIP11 info for the relay we're connected to
         self._relay_info = None
         self._state = RunState.init
-
+        self._dispatcher = dispatcher
 
     @property
     def url(self):
@@ -452,8 +453,9 @@ class Client:
                                               on_close=self._on_close,
                                               on_ping=self._did_comm,
                                               on_pong=self._did_comm)
-
             self._ws.run_forever(ping_interval=5, ping_timeout=3)  # Set dispatcher to automatic reconnection
+
+
 
         def my_thread():
             # Thread(target=monitor_thread).start()

@@ -320,9 +320,10 @@ def post_loop(relays: [str],
 
         filter = {
             'kinds': [kinds],
-            'limit': 1000
+            'limit': 10
         }
-        if subject:
+        # can only be applied on non wrapped, otherwise needs to be filtered by post app
+        if subject and inbox_k is None:
             filter['#subject'] = subject
 
         sub_id = my_client.subscribe(handlers=[post_app],
@@ -335,7 +336,22 @@ def post_loop(relays: [str],
             con_status = status['connected']
             my_gui.draw_messages()
 
+    def on_eose(the_client: Client, sub_id:str, evts: [Event]):
+        Event.sort(evts=evts,
+                   inplace=True,
+                   reverse=False)
+        c_evt: Event
+        u_authors = list({c_evt.pub_key for c_evt in evts})
+        # batch get authors otherwise requests would be fire 1 by 1 as needed
+        # and the relay is likely to error us on number of subs
+        peh.get_profiles(u_authors,
+                         create_missing=True)
+        for c_evt in evts:
+            post_app.do_event(the_client,sub_id,c_evt)
+
+
     with ClientPool(relays) as my_client:
+        peh = NetworkedProfileEventHandler(client=my_client)
         post_env = get_poster(client=my_client,
                               user_k=user_k,
                               to_users_k=to_users_k,
@@ -344,10 +360,10 @@ def post_loop(relays: [str],
                               subject=subject)
         post_app: PostApp = post_env['post_app']
         my_gui = PostAppGui(post_app,
-                            profile_handler=NetworkedProfileEventHandler(client=my_client))
+                            profile_handler=peh)
 
         my_client.set_status_listener(on_status)
-
+        my_client.set_on_eose(on_eose)
 
         do_sub()
         my_gui.run()

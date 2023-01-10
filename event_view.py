@@ -8,7 +8,6 @@ import sys
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
-from cachetools import TTLCache
 import getopt
 import signal
 from monstr.db.db import SQLiteDatabase
