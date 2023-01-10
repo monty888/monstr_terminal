@@ -9,15 +9,12 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 import getopt
-import signal
-from monstr.db.db import SQLiteDatabase
-from monstr.ident.profile import Profile, ProfileList, Contact
-from monstr.ident.event_handlers import ProfileEventHandler, NetworkedProfileEventHandler, ProfileEventHandlerInterface
-from monstr.ident.persist import SQLiteProfileStore, ProfileStoreInterface, MemoryProfileStore
+from monstr.ident.profile import Profile, Contact
+from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
+from monstr.ident.persist import MemoryProfileStore
+from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
-from monstr.event.persist import ClientSQLEventStore, ClientSQLiteEventStore, ClientMemoryEventStore, ClientEventStoreInterface
 from monstr.client.event_handlers import PrintEventHandler, EventAccepter, DeduplicateAcceptor, LengthAcceptor
-from monstr.event.event_handlers import EventHandler
 from monstr.util import util_funcs
 from monstr.event.event import Event
 from monstr.encrypt import Keys
@@ -25,9 +22,10 @@ from app.post import PostApp
 from cmd_line.util import FormattedEventPrinter
 from exception import ConfigException
 
-# TODO: also postgres
-WORK_DIR = '/home/%s/.nostrpy/' % Path.home().name
-DB_FILE = '%s/tmp.db' % WORK_DIR
+# defaults if not otherwise given
+# working directory it'll be created it it doesn't exist
+WORK_DIR = '%s/.nostrpy/' % Path.home()
+# relay/s to attach to
 RELAYS = ['ws://localhost:8888']
 
 def usage():
@@ -45,8 +43,12 @@ usage:
     sys.exit(2)
 
 
-def get_profiles_from_keys(keys: str, private_only=False, single_only=False) -> [Keys]:
+def get_profiles_from_keys(keys: str,
+                           private_only=False,
+                           single_only=False,
+                           alias_map: ProfileFileAlias = None) -> [Keys]:
     """
+    :param alias_map:
     :param keys:            , seperated nsec/npub
     :param private_only:    only accept nsec
     :param single_only:     only a single key
@@ -60,9 +62,19 @@ def get_profiles_from_keys(keys: str, private_only=False, single_only=False) -> 
     ret = []
     for c_key in keys:
         # maybe have flag to allow hex keys but for now just nsec/npub as it's so easy to leak the priv_k otherwise!
-        if not Keys.is_bech32_key(c_key):
+        if Keys.is_bech32_key(c_key):
+            the_key = Keys.get_key(c_key)
+
+        # is it an alias?
+        elif alias_map:
+            p: Profile = alias_map.get_profile(c_key)
+            if p:
+                the_key = p.keys
+            else:
+                raise ConfigException('%s doesn\'t look like a nsec/npub nostr key or alias not found' % c_key)
+        else:
             raise ConfigException('%s doesn\'t look like a nsec/npub nostr key' % c_key)
-        the_key = Keys.get_key(c_key)
+
         if private_only and the_key.private_key_hex() is None:
             raise ConfigException('%s is not a private key' % c_key)
         ret.append(the_key)
@@ -78,11 +90,16 @@ def get_from_config(config,
     inbox_keys = []
     shared_keys = []
 
+    # TODO allow the alias file to be changed
+    alias_file = '%sprofiles.csv' % WORK_DIR
+    alias_map = ProfileFileAlias(alias_file)
+
     # user we're viewing as
     if config['as_user'] is not None:
         user_key = get_profiles_from_keys(config['as_user'],
                                           private_only=False,
-                                          single_only=True)[0]
+                                          single_only=True,
+                                          alias_map=alias_map)[0]
 
         as_user = profile_handler.get_profile(user_key.public_key_hex(),
                                               create_missing=True)
@@ -105,7 +122,8 @@ def get_from_config(config,
     if config['view_profiles']:
         view_keys = get_profiles_from_keys(config['view_profiles'],
                                            private_only=False,
-                                           single_only=False)
+                                           single_only=False,
+                                           alias_map=alias_map)
 
         view_ps = profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
                                                create_missing=True)
@@ -121,7 +139,8 @@ def get_from_config(config,
 
         inbox_keys = get_profiles_from_keys(config['via'],
                                             private_only=True,
-                                            single_only=False)
+                                            single_only=False,
+                                            alias_map=alias_map)
 
         inboxes = profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
                                                create_missing=True).profiles
@@ -142,6 +161,7 @@ def get_from_config(config,
     except ValueError as e:
         print('until - %s not a numeric value' % config['until'])
         sys.exit(2)
+
 
     return {
         'as_user': as_user,
@@ -206,16 +226,6 @@ class MyAccept(EventAccepter):
 def run_watch(config):
     my_client: Client
     relay = config['relay']
-    # hack so that there is always a connection to the in mem db else it'll get closed
-    # import sqlite3
-    # db_keep_ref = sqlite3.connect('file:profile?mode=memory&cache=shared&uri=true')
-    #
-    # profile_store = SQLiteProfileStore('file:profile?mode=memory&cache=shared&uri=true')
-    # profile_store.create()
-
-    # couldn't get in memory sqllite to work... because I think you get a different db across threads
-    # profile_store = SQLiteProfileStore(DB_FILE)
-    profile_store = MemoryProfileStore()
 
     # connection thats just used to query profiles as needed
     my_client = ClientPool(relay)
@@ -421,5 +431,4 @@ def run_event_view():
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.ERROR)
     util_funcs.create_work_dir(WORK_DIR)
-    util_funcs.create_sqlite_store(DB_FILE)
     run_event_view()

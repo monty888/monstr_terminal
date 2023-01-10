@@ -5,37 +5,28 @@ from gevent import monkey
 monkey.patch_all()
 import logging
 import sys
-import time
-from datetime import datetime, timedelta
 from pathlib import Path
 import getopt
-from cachetools import TTLCache
-from monstr.ident.profile import Profile, ProfileList
+from monstr.ident.profile import Profile
 from monstr.ident.event_handlers import NetworkedProfileEventHandler
+from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
-from monstr.event.event import Event, EventTags
-from monstr.event.persist import ClientSQLEventStore, ClientMemoryEventStore
+from monstr.event.event import Event
 from app.post import PostApp
 from cmd_line.post_loop_app import PostAppGui
-from monstr.util import util_funcs
 from monstr.encrypt import Keys
+from monstr.util import util_funcs
 from exception import ConfigException
 
-
-# TODO: also postgres
+# defaults if not otherwise given
+# working directory it'll be created it it doesn't exist
 WORK_DIR = '%s/.nostrpy/' % Path.home()
-# EVENT_STORE = ClientMemoryEventStore()
-# EVENT_STORE = TransientEventStore()
-# RELAYS = ['wss://rsslay.fiatjaf.com','wss://nostr-pub.wellorder.net']
-# RELAYS = ['wss://rsslay.fiatjaf.com']
-# RELAYS = ['ws://localhost:8081']
+# relay/s to attach to
 RELAYS = ['ws://localhost:8888']
-
 
 def usage():
     print("""
-usage:
-
+        TODO!!!
     """)
     sys.exit(2)
 
@@ -68,9 +59,10 @@ def show_post_info(as_user: Profile,
                           msg,
                           ''.join(['-'] * 10)))
 
+
 def get_options():
     ret = {
-        'relay': RELAYS,
+        'relay': ['ws://localhost:8888'],
         'is_encrypt': True,
         'ignore_missing': False,
         'user': None,
@@ -78,10 +70,12 @@ def get_options():
         'inbox': None,
         'subject': None,
         'loop': False,
-        'message': None
+        'message': None,
+        'alias_file': '%sprofiles.csv' % WORK_DIR
     }
 
     try:
+        # change to use argparse?
         opts, args = getopt.getopt(sys.argv[1:], 'hda:t:piles:r:e:v:', ['help',
                                                                         'debug',
                                                                         'relay=',
@@ -129,9 +123,14 @@ def get_options():
     return ret
 
 
-def create_key(key_val:str, for_desc: str):
+def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) -> Keys:
     try:
         ret = Keys.get_key(key_val)
+        if ret is None and alias_map:
+            p = alias_map.get_profile(key_val)
+            if p:
+                ret = p.keys
+
         if ret is None:
             raise Exception()
 
@@ -145,7 +144,7 @@ def create_key(key_val:str, for_desc: str):
     return ret
 
 
-def get_user_keys(user: str) -> Keys:
+def get_user_keys(user: str, alias_map: ProfileFileAlias = None) -> Keys:
 
     if user is None:
         raise ConfigException('no user supplied')
@@ -154,17 +153,22 @@ def get_user_keys(user: str) -> Keys:
         print('created adhoc key - %s/%s' % (ret.public_key_hex(),
                                              ret.public_key_bech32()))
     else:
-        ret = create_key(user, 'user')
+        ret = create_key(user, 'user', alias_map)
 
     return ret
 
 
-def get_to_keys(to_users: [str], ignore_missing: bool) -> [Keys]:
+def get_to_keys(to_users: [str], ignore_missing: bool, alias_map: ProfileFileAlias = None) -> [Keys]:
     ret = []
     if to_users is not None:
         for c_to in to_users:
             try:
                 cu_key = Keys.get_key(c_to)
+                if cu_key is None and alias_map:
+                    p = alias_map.get_profile(c_to)
+                    if p:
+                        cu_key = p.keys
+
                 if cu_key is None:
                     raise Exception()
                 ret.append(cu_key)
@@ -229,6 +233,7 @@ def get_poster(client: Client,
 
     # get profiles of from/to if we can
     peh = NetworkedProfileEventHandler(client=client)
+
     # make list of p keys we need
     p_to_fetch = [user_k.public_key_hex()]
     if to_users_k:
@@ -379,16 +384,23 @@ def run_post():
     loop = opts['loop']
     message = opts['message']
     is_encrypt = opts['is_encrypt']
+    alias_file = opts['alias_file']
+
+    # human alias to keys
+    key_alias = ProfileFileAlias(alias_file)
+
     try:
         if loop is False and message is None:
             raise ConfigException('no message supplied to post')
 
-        user_keys = get_user_keys(user)
+        user_keys = get_user_keys(user,
+                                  alias_map=key_alias)
 
         if is_encrypt and to_users is None:
             raise ConfigException('to users is required for encrypted messages')
 
-        to_keys = get_to_keys(to_users, ignore_missing)
+        to_keys = get_to_keys(to_users, ignore_missing,
+                              alias_map=key_alias)
 
         inbox_keys = get_inbox_keys(inbox)
 
@@ -418,5 +430,6 @@ def run_post():
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.FATAL)
+    util_funcs.create_work_dir(WORK_DIR)
     run_post()
 

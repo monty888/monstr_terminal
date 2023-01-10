@@ -209,7 +209,6 @@ class ProfileStoreInterface(ABC):
                                  is_local=p['priv_k'] != '')
                 ret['added'].add(to_add)
             except Exception as e:
-                print(e)
                 # already exists?
                 ret['existed'].add(to_add)
                 logging.debug('Profile::import_from_file - profile: %s - %s' % (p['profile_name'], e))
