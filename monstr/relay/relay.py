@@ -1,16 +1,12 @@
 from bottle import request, Bottle, abort
 import logging
-from gevent.pywsgi import WSGIServer
-from gevent import Greenlet
-from geventwebsocket import WebSocketError
-from geventwebsocket.handler import WebSocketHandler
-from geventwebsocket.websocket import WebSocket
-from gevent.lock import BoundedSemaphore
+import asyncio
+import aiohttp
+from aiohttp import web, http_websocket
 import json
 from json import JSONDecodeError
 from monstr.event.event import Event
 from monstr.event.persist import RelayEventStoreInterface
-# from monstr.relay.persist import RelayStoreInterface
 from monstr.relay.accept_handlers import AcceptReqHandler
 from monstr.exception import NostrCommandException
 from monstr.encrypt import Keys
@@ -18,8 +14,7 @@ from sqlite3 import IntegrityError
 try:
     import psycopg2.errors as pg_errors
 except:
-    pass
-from monstr.util import util_funcs
+    pg_errors = None
 
 
 class Relay:
@@ -61,12 +56,10 @@ class Relay:
                  pubkey: str = None,
                  contact: str = None,
                  enable_nip15=False):
-        self._app = Bottle()
-        # self._web_sockets = {}
 
         # single lock for accessing shared resource
-        self._lock = BoundedSemaphore()
         # corrently connected ws
+        self._ws_id = 0
         self._ws = {}
         self._store = store
 
@@ -78,8 +71,7 @@ class Relay:
         self._enable_nip15 = enable_nip15
 
         # by default when we recieve requests as long as the event has a valid sig we accept
-        # (Prob we should also have a future timestamp requirement, it'd probably have to be 12hr+ as
-        # there is no timezone info with create_at)
+        # (Prob we should also have a future timestamp requirement maybe + a few mins to allow for system clock drift
         # but in real world relay will probably want to protect itself more e.g. set max length on
         # event content, restrict to set kinds or even only allow set pubkeys to posts
         # self._accept_req can be a single class or [] of handlers that are called and the event will
@@ -99,8 +91,10 @@ class Relay:
                                                                                               self._store.is_NIP16()))
         # this is the server that we run as, it's created after calling start()
         # default is localhost:8080
-        self._server: WSGIServer = None
-        # end point to connect ws after host://port:end_point default /
+        self._server: web.Application = None
+        self._runner: web.AppRunner = None
+        self._host = None
+        self._port = None
         self._end_point = None
 
         if pubkey is not None and not Keys.is_key(pubkey):
@@ -132,7 +126,21 @@ class Relay:
                 raise Exception('given contact pubkey is not correct: %s' % pubkey)
             self._relay_information['pubkey'] = pubkey
 
-    def start(self, host='localhost', port=8080, end_point='/'):
+    def _starter(self, host='localhost', port=8080, end_point='/', routes=None):
+        # self._app.route(end_point, callback=self._handle_websocket)
+        self._host = host
+        self._port = port
+        self._end_point = end_point
+
+        self._server = web.Application()
+        # self._server.router.add_route('*', '/{path_info:.*}', self._wsgi_handler)
+
+        my_routes = [web.get(self._end_point, handler=self._websocket_handler)]
+        if routes:
+            my_routes = my_routes + routes
+        self._server.add_routes(my_routes)
+
+    def start(self, host='localhost', port=8080, end_point='/', routes=None):
         """
         runs within own gevent.pywsgi.WSGIServer
         probably to expose _app so that it can be run in any WSGI server by caller
@@ -144,15 +152,28 @@ class Relay:
         :return:
         """
         logging.info('Relay::start %s:%s%s' % (host, port, end_point))
-        self._app.route(end_point, callback=self._handle_websocket)
-        self._end_point = end_point
-        self._server = WSGIServer((host, port), self._app, handler_class=WebSocketHandler)
-        self._server.serve_forever()
+        self._starter(host, port, end_point, routes)
+        # starting the relay is going to block... won't return until ctrl-c or something
+        web.run_app(host=self._host,
+                    port=self._port,
+                    app=self._server)
+
+    async def start_background(self, host='localhost', port=8080, end_point='/', routes=None):
+        logging.info('Relay::start %s:%s%s in background' % (host, port, end_point))
+
+        self._starter(host, port, end_point, routes)
+
+        self._runner = web.AppRunner(self._server)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner,
+                           host=self._host,
+                           port=self._port)
+        await site.start()
 
     @property
     def url(self):
-        return 'ws://%s:%s%s' % (self._server.server_host,
-                                 self._server.server_port,
+        return 'ws://%s:%s%s' % (self._host,
+                                 self._port,
                                  self._end_point)
 
     @property
@@ -160,42 +181,56 @@ class Relay:
         return self._store
 
     @property
-    def app(self):
-        return self._app
+    def server(self) -> web.Application:
+        return self._server
 
     @property
     def started(self):
         ret = False
-        if self._server is not None:
-            ret = self._server.started
+        if self._runner is None and self._server is not None:
+            return True
+        elif self._runner is not None:
+            return True
         return ret
 
     def end(self):
         # note to call this you'd have to have called start in a thread or similar
-        self._server.stop()
+        self._server.shutdown()
 
-    def _handle_websocket(self):
-        logging.debug('Websocket opened')
-        ws = request.environ.get('wsgi.websocket')
+    async def end_background(self):
+        await self._runner.cleanup()
 
-        if not ws:
-            # abort(400, 'Expected WebSocket request.')
+    async def _websocket_handler(self, request):
+        ws = web.WebSocketResponse()
+        if not ws.can_prepare(request).ok:
             return self._NIP11_relay_info_route()
 
-        # set up place to store subs for ws
-        self._ws[ws] = {
-            'subs': {
-            },
-            'send_lock': BoundedSemaphore()
+        await ws.prepare(request)
+
+        # give the socket a unique id
+        ws.id = self._ws_id
+        self._ws_id += 1
+
+        self._ws[ws.id] = {
+            'subs': {},
+            'ws': ws
         }
 
-        while True:
-            try:
-                self._do_request(ws, ws.receive())
-            except WebSocketError:
-                break
+        async for msg in ws:
 
-    def _do_request(self, ws: WebSocket, req_str):
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await self._do_request(ws, msg.data)
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                print('ws connection closed with exception %s' %
+                      ws.exception())
+
+        print('websocket connection closed')
+
+        del self._ws[ws.id]
+
+        return ws
+
+    async def _do_request(self, ws, req_str):
         # passed nothing? nothing to do
         if not req_str:
             return
@@ -210,21 +245,21 @@ class Relay:
 
             # a post of an event
             if cmd == 'EVENT':
-                self._do_event(as_json, ws)
+                await self._do_event(as_json, ws)
             # register a subscription
             elif cmd == 'REQ':
-                self._do_sub(as_json, ws)
+                await self._do_sub(as_json, ws)
             elif cmd == 'CLOSE':
-                self._do_unsub(as_json, ws)
+                await self._do_unsub(as_json, ws)
 
         except JSONDecodeError as je:
             err = ['NOTICE', 'unable to decode command string']
-            ws.send(json.dumps(err))
+            await ws.send_str(json.dumps(err))
         except NostrCommandException as ne:
             err = ['NOTICE', str(ne)]
-            ws.send(json.dumps(err))
+            await ws.send_str(json.dumps(err))
 
-    def _do_event(self, req_json, ws: WebSocket):
+    async def _do_event(self, req_json, ws):
         if len(req_json) <= 1:
             raise NostrCommandException('EVENT command missing event data')
         evt = Event.from_JSON(req_json[1])
@@ -244,30 +279,21 @@ class Relay:
                 logging.debug('Relay::_do_event doing delete events - %s ' % evt.e_tags)
                 self._store.do_delete(evt)
 
-            self._check_subs(evt)
+            await self._check_subs(evt)
+        except Exception as e:
+            if pg_errors:
+                i_exceptions = IntegrityError, pg_errors.UniqueViolation
+            else:
+                i_exceptions = IntegrityError
 
-        except (IntegrityError, pg_errors.UniqueViolation) as ie:
-            msg = str(ie).lower()
-            if 'event_id' in msg and 'unique' in msg:
-                raise NostrCommandException.event_already_exists(evt.id)
+            if isinstance(e, i_exceptions):
+                msg = str(e).lower()
+                if 'event_id' in msg and 'unique' in msg:
+                    raise NostrCommandException.event_already_exists(evt.id)
+            else:
+                logging.debug('Relay::_do_event - %s' % str(e))
 
-    def _clean_ws(self):
-        """
-            this cleans old websockets and thier subs
-            TODO: add close handler to the web sockets we get so that we do the clean up then,
-            when done this most likely can go...
-        """
-        to_rem = []
-        for ws in self._ws:
-            if ws.closed:
-                to_rem.append(ws)
-
-        if to_rem:
-            with self._lock:
-                for c_rem in to_rem:
-                    del self._ws[c_rem]
-
-    def _check_subs(self, evt:Event):
+    async def _check_subs(self, evt: Event):
         """
         go through all our filters and send the event to any clients who have registered subs
         with filters that the new event passes.
@@ -281,28 +307,18 @@ class Relay:
         :return:
         """
 
+        my_sends = set()
 
-        # this will remove any old sockets that already got closed
-        self._clean_ws()
-
-        # we should probably still catch websocket closed errs here, they can be clean next hit
-
-        def get_send(ws, sub_id, evt, lock):
-            def do_send():
-                try:
-                    self._send_event(ws, sub_id, evt,lock)
-                except:
-                    print('mofo!!!!')
-            return do_send
-
-        for ws in self._ws:
-            for c_sub_id in self._ws[ws]['subs']:
-                the_sub = self._ws[ws]['subs'][c_sub_id]
+        for socket_id in self._ws:
+            for c_sub_id in self._ws[socket_id]['subs']:
+                the_sub = self._ws[socket_id]['subs'][c_sub_id]
                 # event passes sub filter
                 if evt.test(the_sub['filter']):
-                    Greenlet(get_send(ws, c_sub_id, evt.event_data(), self._ws[ws]['send_lock'])).start()
+                    task = asyncio.create_task(self._send_event(self._ws[socket_id]['ws'], c_sub_id, evt.event_data()))
+                    my_sends.add(task)
+                    task.add_done_callback(my_sends.discard)
 
-    def _do_sub(self, req_json, ws: WebSocket):
+    async def _do_sub(self, req_json, ws):
         logging.info('subscription requested')
         # get sub_id and filter fro the json
         if len(req_json) <= 1:
@@ -316,40 +332,34 @@ class Relay:
             # raise NostrCommandException('REQ command missing filter')
 
         # this user already subscribed under same sub_id
-        if sub_id in self._ws[ws]['subs']:
+        socket_id = ws.id
+        if sub_id in self._ws[socket_id]['subs']:
             raise NostrCommandException('REQ command for sub_id that already exists - %s' % sub_id)
         # this sub would put us over max for this socket
-        sub_count = len(self._ws[ws]['subs'])
+        sub_count = len(self._ws[socket_id]['subs'])
         if sub_count >= self._max_sub:
             raise NostrCommandException('REQ new sub_id %s not allowed, already at max subs=%s' % (sub_id, self._max_sub))
 
-        self._ws[ws]['subs'][sub_id] = {
+        self._ws[socket_id]['subs'][sub_id] = {
             'id': sub_id,
             'filter': filter
         }
 
         logging.info('Relay::_do_sub subscription added %s (%s)' % (sub_id, filter))
 
-        # post back the pre existing
+        # get and send any stored events we have and send back
         evts = self._store.get_filter(filter)
-        def get_sub_func(ws, sub_id, lock, evts):
-            def my_func():
-                [self._send_event(ws, sub_id, c_evt, lock)
-                 for c_evt in evts]
 
-                # NIP15 support
-                if self._enable_nip15:
-                    self._send_eose(ws, sub_id, lock)
+        # done in tasks so they get sent in order and EOSE comes after all the events
+        for c_evt in evts:
+            task = asyncio.create_task(self._send_event(ws, sub_id, c_evt))
+            await task
 
-            return my_func
+        # send EOSE event if enabled - unlikely it wouldn't be
+        if self._enable_nip15:
+            await self._send_eose(ws, sub_id)
 
-        # unsafe -?? make it safe
-        Greenlet(get_sub_func(ws, sub_id, self._ws[ws]['send_lock'], evts)).start()
-
-        # for c_evt in evts:
-        #     self._send_event(ws, sub_id, c_evt, self._ws[ws]['send_lock'])
-
-    def _do_unsub(self, req_json, ws: WebSocket):
+    async def _do_unsub(self, req_json, ws):
         logging.info('un-subscription requested')
         if len(req_json) <= 1:
             raise NostrCommandException('REQ command missing sub_id')
@@ -357,48 +367,45 @@ class Relay:
         # get sub_id from json
         sub_id = req_json[1]
         # user isn't subscribed anyhow, nothing to do
-        if sub_id not in self._ws[ws]['subs']:
+        socket_id = ws.id
+        if sub_id not in self._ws[socket_id]['subs']:
             raise NostrCommandException('CLOSE command for sub_id that not subscribed to, nothing to do - %s' % sub_id)
 
         # remove the sub
-        del self._ws[ws]['subs'][sub_id]
+        del self._ws[socket_id]['subs'][sub_id]
         # not actual exception but this will send notice back that sub_id has been closed, might be useful to client?
         raise NostrCommandException('CLOSE command for sub_id %s - success' % sub_id)
 
-    def _do_send(self, ws: WebSocket, data, lock: BoundedSemaphore):
+    async def _do_send(self, ws: http_websocket, data):
         try:
-            with lock:
-                ws.send(json.dumps(data))
+            await ws.send_str(json.dumps(data))
         except Exception as e:
             logging.info('Relay::_do_send error: %s' % e)
 
-    def _send_event(self, ws: WebSocket, sub_id, evt, lock: BoundedSemaphore):
-        self._do_send(ws=ws,
-                      data=[
-                          'EVENT',
-                          sub_id,
-                          evt
-                      ],
-                      lock=lock)
+    async def _send_event(self, ws: http_websocket, sub_id, evt):
+        asyncio.create_task(self._do_send(ws=ws,
+                            data=[
+                                'EVENT',
+                                sub_id,
+                                evt
+                            ]))
 
-
-    def _send_eose(self, ws: WebSocket, sub_id, lock: BoundedSemaphore):
+    async def _send_eose(self, ws: http_websocket, sub_id):
         """
         NIP15 send end of stored events notice
         https://github.com/nostr-protocol/nips/blob/master/15.md
         """
-        self._do_send(ws=ws,
-                      data=[
-                          'EOSE', sub_id
-                      ],
-                      lock=lock)
+        await self._do_send(ws=ws,
+                            data=[
+                                'EOSE', sub_id
+                            ])
 
     def _NIP11_relay_info_route(self):
         """
         as https://github.com/nostr-protocol/nips/blob/master/11.md
         :return:
         """
-        return self._relay_information
+        return web.Response(text=json.dumps(self._relay_information))
 
 #    below are some routes that can be added to the monstr relay and give methods to access data via standard url in the
 #    webbrowser. Useful for testing, maybe also for other things?
@@ -412,8 +419,11 @@ def event_route(r: Relay):
             relay.app.route('/e', callback=route_method(relay))
             http://host:port/e?id=<event_id> will now return events
     """
-    def the_route():
-        id = request.params.id
+    def the_route(request: web.Request):
+        id = None
+        if 'id' in request.query:
+            id = request.query['id']
+
         try:
             if id == '':
                 raise ValueError('id field is required')
@@ -430,6 +440,88 @@ def event_route(r: Relay):
         except ValueError as ve:
             ret = str(ve)
 
+        if isinstance(ret, str):
+            ret = web.Response(text=ret)
+        else:
+            ret = web.json_response(ret)
+
+        return ret
+
+    return the_route
+
+
+def view_profile_route(r: Relay):
+    """
+    a simple profile view for what we have in the relay
+    :param r:
+    :return:
+    """
+    def the_route(request: web.Request):
+
+        pub_k = None
+        if 'pub_k' in request.query:
+            pub_k = request.query['pub_k']
+
+        try:
+            if pub_k is None:
+                raise ValueError('pub_k field is required')
+            k = Keys.get_key(pub_k)
+            if k is None:
+                raise ValueError('%s - doesn\'t look like a valid nostr key' % pub_k)
+
+            evts = r.store.get_filter({
+                'authors': [k.public_key_hex()],
+                'kinds': [Event.KIND_META]
+            })
+
+            evts = Event.latest_events_only([Event.from_JSON(c_evt) for c_evt in evts],
+                                            kind=Event.KIND_META)
+
+
+
+
+            if evts:
+                p_attrs = json.loads(evts[0].content)
+                name = '-'
+                if 'name' in p_attrs:
+                    name = p_attrs['name']
+
+                about = '-'
+                if 'about' in p_attrs:
+                    about = p_attrs['about']
+
+                picture = ''
+                if 'picture' in p_attrs:
+                    picture = """
+                        <img src='%s' />
+                    """ % p_attrs['picture']
+
+                ret = """
+                    <HTML>
+                        <b>%s</b></br>
+                        Name: %s <br>
+                        About: %s <br>
+                        %s    
+                    </HTML>'
+                """ % (k.public_key_hex(),
+                       name,
+                       about,
+                       picture)
+
+            else:
+                ret = '%s no meta held on relay' % k.public_key_hex()
+
+        except ValueError as ve:
+            ret = str(ve)
+        except JSONDecodeError as je:
+            ret = str(je)
+
+        if isinstance(ret, str):
+            ret = web.Response(text=ret,
+                               content_type='text/html')
+        else:
+            ret = web.json_response(ret)
+
         return ret
 
     return the_route
@@ -443,7 +535,7 @@ def filter_route(r: Relay):
             relay.app.route('/req', callback=route_method(relay))
             http://host:port/req?kinds=0?authors=some_key
     """
-    def the_route():
+    def the_route(request: web.Request):
 
         def _get_param(name: str, mutiple=False, numeric=False):
 
@@ -500,6 +592,6 @@ def filter_route(r: Relay):
                 'events': evts
             }
 
-        return ret
+        return web.json_response(ret)
 
     return the_route

@@ -2,6 +2,8 @@
     prompt_toolkit front end to from app.post import PostApp
 
 """
+import asyncio
+import logging
 
 from prompt_toolkit import Application
 from prompt_toolkit.layout import Layout, ScrollablePane
@@ -30,12 +32,14 @@ class PostAppGui:
         self._make_gui()
         self._post_app.set_on_message(self._on_msg)
         self._msg_display_height = 0
+        self._draw_task = None
 
     def _make_gui(self):
         kb = KeyBindings()
         buffer1 = Buffer()
 
-        self._make_msg_split()
+        # self._make_msg_split()
+        self._msg_display_height = 0
         self._scroll_bottom()
         root_con = HSplit([
             self._msg_scroll_con,
@@ -89,15 +93,27 @@ class PostAppGui:
             pos = (self._msg_display_height + 3) - d_h
         self._msg_scroll_con.vertical_scroll = pos
 
-    def draw_messages(self):
-        self._make_msg_split()
+    async def draw_messages(self):
+        # has to be asunc because of profile fetching
+        await self._make_msg_split()
         self._app.invalidate()
         self._scroll_bottom()
 
     def _on_msg(self, evt):
-        self.draw_messages()
 
-    def _make_msg_split(self):
+        # async def delay_draw():
+        #     await asyncio.sleep(0.5)
+        #     await self.draw_messages()
+
+        # bit hacky but as the draw might end up doing some fetches this stops too many being fired off
+        # this seems to work as is... but the above with an actual delay might work better if this still cause
+        # problems
+        if self._draw_task:
+            self._draw_task.cancel()
+            self._draw_task = None
+        self._draw_task = asyncio.create_task(self.draw_messages())
+
+    async def _make_msg_split(self):
         """
         make up the components to display the posts on screen
         note that though that though we can only send post of type encrypt/plaintext dependent
@@ -111,6 +127,11 @@ class PostAppGui:
 
         as_user = self._post_app.as_user
         self._msg_display_height = 0
+        # prefetch all the profiles we'll need
+        if self._profile_handler:
+            await self._profile_handler.get_profiles([c_m.pub_key for c_m in self._post_app.message_events],
+                                                     create_missing=True)
+
         for c_m in self._post_app.message_events:
             content = c_m.content
 
@@ -139,9 +160,10 @@ class PostAppGui:
 
             if content:
                 msg_height = len(content.split('\n'))
+                msg_profile = None
                 if self._profile_handler:
-                    msg_profile = self._profile_handler.get_profile(c_m.pub_key,
-                                                                    create_missing=True)
+                    msg_profile = await self._profile_handler.get_profile(c_m.pub_key,
+                                                                          create_missing=True)
 
                 prompt_user_text = util_funcs.str_tails(c_m.pub_key, 4)
                 if msg_profile:
@@ -159,7 +181,6 @@ class PostAppGui:
 
         self._msg_split_con.children = to_add
 
-
-    def run(self):
-        self._app.run()
+    async def run(self):
+        await self._app.run_async()
 

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import logging
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from monstr.client.client import Client
@@ -140,7 +142,6 @@ class PostApp:
         return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and self._to_users is None)
 
     def do_event(self, client: Client, sub_id, evt: Event):
-
         # we likely to need to do this on all event handlers except those that would be
         # expected to deal with duplciates themselves e.g. persist
         if evt.id not in self._duplicates:
@@ -148,20 +149,24 @@ class PostApp:
             if len(self._duplicates) >= self._max_dedup:
                 self._duplicates.popitem(False)
 
-
             # unwrap if evt is shared
             if self._public_inbox:
-                # evt = self._unwrap_public(evt)
                 if evt.pub_key == self._public_inbox.public_key:
-                    if self._is_encrypt:
-                        evt = PostApp.clust_unwrap_event(evt, self._as_user, self._shared_keys, {})
-                    else:
-                        try:
-                            se = SharedEncrypt(self._public_inbox.private_key)
-                            se.derive_shared_key(self._public_inbox.public_key)
-                            evt = evt.decrypted_content(self._public_inbox.private_key,se.shared_key())
-                        except:
-                            pass
+                    evt = PostApp.clust_unwrap_event(evt, self._as_user, self._shared_keys, {
+                        self._public_inbox.keys.public_key_hex(): self._public_inbox.keys.private_key_hex()
+                    })
+                    if self._is_encrypt and evt.kind != Event.KIND_ENCRYPT:
+                        evt = None
+                    elif not self._is_encrypt and evt.kind != Event.KIND_TEXT_NOTE:
+                        evt = None
+                        #
+                        #
+                        # try:
+                        #     se = SharedEncrypt(self._public_inbox.private_key)
+                        #     se.derive_shared_key(self._public_inbox.public_key)
+                        #     evt = evt.decrypted_content(self._public_inbox.private_key, se.shared_key())
+                        # except Exception as e:
+                        #     pass
 
                 else:
                     evt = None

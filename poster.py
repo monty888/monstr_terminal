@@ -1,9 +1,8 @@
 """
     make notes from the command line see --help for more options
 """
-from gevent import monkey
-monkey.patch_all()
 import logging
+import asyncio
 import sys
 from pathlib import Path
 import getopt
@@ -223,12 +222,12 @@ def create_post_event(user: Keys,
     return ret
 
 
-def get_poster(client: Client,
-               user_k: Keys,
-               to_users_k: Keys,
-               inbox_k: Keys,
-               is_encrypt: bool,
-               subject: str):
+async def get_poster(client: Client,
+                     user_k: Keys,
+                     to_users_k: Keys,
+                     inbox_k: Keys,
+                     is_encrypt: bool,
+                     subject: str):
     k: Keys
 
     # get profiles of from/to if we can
@@ -242,24 +241,24 @@ def get_poster(client: Client,
         p_to_fetch = p_to_fetch + [inbox_k.public_key_hex()]
 
     # pre-fetch them, creating stubs for any we didn't find
-    peh.get_profiles(pub_ks=p_to_fetch, create_missing=True)
+    await peh.get_profiles(pub_ks=p_to_fetch, create_missing=True)
 
     # get the sending user profile
-    user_p = peh.get_profile(pub_k=user_k.public_key_hex())
+    user_p = await peh.get_profile(pub_k=user_k.public_key_hex())
     # because relay doesn't know the private key
     user_p.private_key = user_k.private_key_hex()
 
     # and for the inbox, normally we wouldn't expect this to have a profile
     inbox_p = None
     if inbox_k:
-        inbox_p = peh.get_profile(inbox_k.public_key_hex())
+        inbox_p = await peh.get_profile(inbox_k.public_key_hex())
         # again the relay wouldn't know this
         inbox_p.private_key = inbox_k.private_key_hex()
 
     # get the to users profile if any
     to_users_p = None
     if to_users_k:
-        to_users_p = peh.get_profiles([k.public_key_hex() for k in to_users_k])
+        to_users_p = await peh.get_profiles([k.public_key_hex() for k in to_users_k])
 
     post_app = PostApp(use_relay=client,
                        as_user=user_p,
@@ -275,21 +274,21 @@ def get_poster(client: Client,
     }
 
 
-def post_single(relays: [str],
-                user_k: Keys,
-                to_users_k: Keys,
-                inbox_k: Keys,
-                is_encrypt: bool,
-                subject: str,
-                message: str):
+async def post_single(relays: [str],
+                      user_k: Keys,
+                      to_users_k: Keys,
+                      inbox_k: Keys,
+                      is_encrypt: bool,
+                      subject: str,
+                      message: str):
 
-    with ClientPool(relays) as client:
-        post_env = get_poster(client=client,
-                              user_k=user_k,
-                              to_users_k=to_users_k,
-                              inbox_k=inbox_k,
-                              is_encrypt=is_encrypt,
-                              subject=subject)
+    async with Client(relays[0]) as client:
+        post_env = await get_poster(client=client,
+                                    user_k=user_k,
+                                    to_users_k=to_users_k,
+                                    inbox_k=inbox_k,
+                                    is_encrypt=is_encrypt,
+                                    subject=subject)
 
         post_app: PostApp = post_env['post_app']
         user: Profile = post_env['user']
@@ -306,18 +305,20 @@ def post_single(relays: [str],
         post_app.do_post(msg=message)
 
 
-def post_loop(relays: [str],
-              user_k: Keys,
-              to_users_k: Keys,
-              inbox_k: Keys,
-              is_encrypt: bool,
-              subject: str):
+async def post_loop(relays: [str],
+                    user_k: Keys,
+                    to_users_k: Keys,
+                    inbox_k: Keys,
+                    is_encrypt: bool,
+                    subject: str):
 
     sub_id: str = None
     con_status = None
 
     kinds = Event.KIND_ENCRYPT
-    if is_encrypt is False:
+    # if we're using an inbox then events are always encrypted type 4
+    # though they may be unencrypted to anyone who has the inbox keys
+    if is_encrypt is False and not inbox_k:
         kinds = Event.KIND_TEXT_NOTE
 
     def do_sub():
@@ -327,6 +328,9 @@ def post_loop(relays: [str],
             'kinds': [kinds],
             'limit': 10
         }
+        if inbox_k:
+            filter['authors'] = inbox_k.public_key_hex()
+
         # can only be applied on non wrapped, otherwise needs to be filtered by post app
         if subject and inbox_k is None:
             filter['#subject'] = subject
@@ -349,36 +353,41 @@ def post_loop(relays: [str],
         u_authors = list({c_evt.pub_key for c_evt in evts})
         # batch get authors otherwise requests would be fire 1 by 1 as needed
         # and the relay is likely to error us on number of subs
-        peh.get_profiles(u_authors,
-                         create_missing=True)
-        for c_evt in evts:
-            post_app.do_event(the_client,sub_id,c_evt)
+        async def do_events():
+            await peh.get_profiles(u_authors,
+                             create_missing=True)
+            for c_evt in evts:
+                post_app.do_event(the_client, sub_id, c_evt)
+
+        asyncio.create_task(do_events())
 
     def on_connect(the_client: Client):
         do_sub()
 
-    my_client = ClientPool(relays)
-    peh = NetworkedProfileEventHandler(client=my_client)
-    post_env = get_poster(client=my_client,
-                          user_k=user_k,
-                          to_users_k=to_users_k,
-                          inbox_k=inbox_k,
-                          is_encrypt=is_encrypt,
-                          subject=subject)
-    post_app: PostApp = post_env['post_app']
-    my_gui = PostAppGui(post_app,
-                        profile_handler=peh)
+    async with Client(relays[0]) as my_client:
+        peh = NetworkedProfileEventHandler(client=my_client)
+        post_env = await get_poster(client=my_client,
+                                    user_k=user_k,
+                                    to_users_k=to_users_k,
+                                    inbox_k=inbox_k,
+                                    is_encrypt=is_encrypt,
+                                    subject=subject)
+        post_app: PostApp = post_env['post_app']
+        my_gui = PostAppGui(post_app,
+                            profile_handler=peh)
 
-    my_client.set_status_listener(on_status)
-    my_client.set_on_eose(on_eose)
-    my_client.set_on_connect(on_connect)
-    my_client.start()
-    my_gui.run()
-    my_client.end()
+        my_client.set_on_status(on_status)
+        my_client.set_on_eose(on_eose)
+        my_client.set_on_connect(on_connect)
+        # manually call the connect which just adds the sub
+        on_connect(my_client)
+
+        await my_gui.run()
+        # while True:
+        #     await asyncio.sleep(0.1)
 
 
-
-def run_post():
+async def run_post():
     opts = get_options()
     user = opts['user']
     to_users = opts['to_users']
@@ -408,31 +417,29 @@ def run_post():
         inbox_keys = get_inbox_keys(inbox)
 
         if opts['loop'] is False:
-            post_single(relays=opts['relay'],
-                        user_k=user_keys,
-                        to_users_k=to_keys,
-                        inbox_k=inbox_keys,
-                        is_encrypt=opts['is_encrypt'],
-                        subject=opts['subject'],
-                        message=opts['message']
-                        )
+            await post_single(relays=opts['relay'],
+                              user_k=user_keys,
+                              to_users_k=to_keys,
+                              inbox_k=inbox_keys,
+                              is_encrypt=opts['is_encrypt'],
+                              subject=opts['subject'],
+                              message=opts['message']
+                              )
         else:
-            post_loop(relays=opts['relay'],
-                      user_k=user_keys,
-                      to_users_k=to_keys,
-                      inbox_k=inbox_keys,
-                      is_encrypt=opts['is_encrypt'],
-                      subject=opts['subject']
-                      )
+            await post_loop(relays=opts['relay'],
+                            user_k=user_keys,
+                            to_users_k=to_keys,
+                            inbox_k=inbox_keys,
+                            is_encrypt=opts['is_encrypt'],
+                            subject=opts['subject']
+                            )
 
     except ConfigException as ce:
         print(ce)
 
 
-
-
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.FATAL)
     util_funcs.create_work_dir(WORK_DIR)
-    run_post()
+    asyncio.run(run_post())
 

@@ -1,17 +1,15 @@
 """
     outputs evetns as they're seen from connected relays
 """
-from gevent import monkey
-monkey.patch_all()
 import logging
 import sys
-import time
+import signal
+import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta
 import getopt
 from monstr.ident.profile import Profile, Contact
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
-from monstr.ident.persist import MemoryProfileStore
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import PrintEventHandler, EventAccepter, DeduplicateAcceptor, LengthAcceptor
@@ -81,8 +79,8 @@ def get_profiles_from_keys(keys: str,
     return ret
 
 
-def get_from_config(config,
-                    profile_handler: ProfileEventHandlerInterface):
+async def get_from_config(config,
+                          profile_handler: ProfileEventHandlerInterface):
     as_user = None
     all_view = []
     view_extra = []
@@ -93,7 +91,6 @@ def get_from_config(config,
     # TODO allow the alias file to be changed
     alias_file = '%sprofiles.csv' % WORK_DIR
     alias_map = ProfileFileAlias(alias_file)
-
     # user we're viewing as
     if config['as_user'] is not None:
         user_key = get_profiles_from_keys(config['as_user'],
@@ -101,8 +98,8 @@ def get_from_config(config,
                                           single_only=True,
                                           alias_map=alias_map)[0]
 
-        as_user = profile_handler.get_profile(user_key.public_key_hex(),
-                                              create_missing=True)
+        as_user = await profile_handler.get_profile(user_key.public_key_hex(),
+                                                    create_missing=True)
         # if we were given a private key then we'll attach it to the profile so it can decode msgs
         if user_key.private_key_hex():
             as_user.private_key = user_key.private_key_hex()
@@ -111,10 +108,10 @@ def get_from_config(config,
             raise ConfigException('unable to find/create as_user profile - %s' % config['as_user'])
 
         c_c: Contact
-        contacts = profile_handler.load_contacts(as_user)
+        contacts = await profile_handler.load_contacts(as_user)
         if contacts:
-            contact_ps = profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
-                                                      create_missing=True)
+            contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
+                                                            create_missing=True)
 
             all_view = all_view + contact_ps.profiles
 
@@ -125,8 +122,8 @@ def get_from_config(config,
                                            single_only=False,
                                            alias_map=alias_map)
 
-        view_ps = profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
-                                               create_missing=True)
+        view_ps = await profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
+                                                     create_missing=True)
 
         all_view = all_view + view_ps.profiles
         view_extra = view_ps.profiles
@@ -142,8 +139,9 @@ def get_from_config(config,
                                             single_only=False,
                                             alias_map=alias_map)
 
-        inboxes = profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
-                                               create_missing=True).profiles
+        inboxes = await profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
+                                                     create_missing=True)
+        inboxes = inboxes.profiles
         all_view = all_view + inboxes
 
     if as_user is not None and as_user.private_key:
@@ -222,24 +220,24 @@ class MyAccept(EventAccepter):
                    (self._as_user.public_key in evt.pub_key or self._as_user.public_key in evt.p_tags)
 
 
-def run_watch(config):
+async def run_watch(config):
     my_client: Client
     relay = config['relay']
 
-    # connection thats just used to query profiles as needed
-    my_client = ClientPool(relay)
-    my_client.start()
+    def my_on_notice(the_client: Client, notice_txt: str):
+        if 'max' in notice_txt:
+            print(notice_txt)
 
-    # note this is only waiting for at least one relay to connect, maybe add a wait options
-    # to give time for slower relays to connect?
-    while not my_client.connected:
-        time.sleep(0.1)
+    # connection thats just used to query profiles as needed
+    my_client = Client(relay[0], on_notice=my_on_notice)
+    asyncio.create_task(my_client.run())
+    await my_client.wait_connect()
 
     profile_handler = NetworkedProfileEventHandler(client=my_client)
 
     # pop the config
     try:
-        config = get_from_config(config, profile_handler)
+        config = await get_from_config(config, profile_handler)
     except ConfigException as ce:
         print(ce)
         my_client.end()
@@ -257,7 +255,7 @@ def run_watch(config):
     since = config['since']
     until = config['until']
 
-    def print_run_info():
+    async def print_run_info():
         c_p: Profile
         c_c: Contact
 
@@ -269,11 +267,11 @@ def run_watch(config):
 
             # this will group fetch all follow profiles so they won't be fetch individually
             # when we list
-            profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
-                                         create_missing=True)
+            await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
+                                               create_missing=True)
 
             for c_c in as_user.contacts:
-                c_p = profile_handler.get_profile(c_c.contact_public_key)
+                c_p = await profile_handler.get_profile(c_c.contact_public_key)
                 if c_p:
                     print(c_p.display_name())
                 else:
@@ -296,7 +294,7 @@ def run_watch(config):
             print('until %s hours from this point' % until)
 
     # show run info
-    print_run_info()
+    await print_run_info()
     # change to since to point in time
     since = datetime.now() - timedelta(hours=since)
 
@@ -316,20 +314,23 @@ def run_watch(config):
         # profile_handler.do_event(the_client,sub_id, events)
 
         # prfetch the profiles that we'll need
-        c_evt: Event
-        ukeys = set()
-        for c_evt in events:
-            ukeys.add(c_evt.pub_key)
-            for c_tag in c_evt.p_tags:
-                ukeys.add(c_tag)
+        async def do_events():
+            c_evt: Event
+            ukeys = set()
+            for c_evt in events:
+                ukeys.add(c_evt.pub_key)
+                for c_tag in c_evt.p_tags:
+                    ukeys.add(c_tag)
 
-        # force fetch of profiles
-        profile_handler.get_profiles(list(ukeys),
-                                     create_missing=True)
 
-        for c_evt in events:
-            my_printer.do_event(the_client, sub_id, c_evt)
+            # # force fetch of profiles
+            await profile_handler.get_profiles(list(ukeys),
+                                               create_missing=True)
 
+            for c_evt in events:
+                my_printer.do_event(the_client, sub_id, c_evt)
+
+        asyncio.create_task(do_events())
 
     def my_connect(the_client: Client):
         # so on reconnect we don't ask for everthing again
@@ -374,24 +375,27 @@ def run_watch(config):
                                      inbox_keys=inbox_keys,
                                      share_keys=share_keys)
 
-    def my_display(the_client: Client, sub_id: str, evt: [Event]):
-        my_print.print_event(evt)
+    async def my_display(the_client: Client, sub_id: str, evt: [Event]):
+        await my_print.print_event(evt)
 
     my_printer.display_func = my_display
 
-    # hacky, fix this - is to force the my_connect to run... probably we should just add sub
-    # and in the my_connect add sub again
-    my_client.end()
-    my_client.set_on_connect(my_connect)
+    # we end and reconnect - bit hacky but just makes thing easier to set in action
     my_client.set_on_eose(my_eose)
-    my_client.start()
+    my_client.set_on_connect(my_connect)
+    # because we're already connected we'll call manually
+    my_connect(my_client)
+
+    while True:
+        await asyncio.sleep(0.1)
+    my_client.end()
+
 
 
     # profile_client.end()
 
 
-
-def run_event_view():
+async def run_event_view():
     config = {
         'as_user': None,
         'view_profiles': None,
@@ -430,7 +434,7 @@ def run_event_view():
             if o in ('-d', '--debug'):
                 logging.getLogger().setLevel(logging.DEBUG)
 
-        run_watch(config)
+        await run_watch(config)
 
     except getopt.GetoptError as e:
         print(e)
@@ -440,4 +444,8 @@ def run_event_view():
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.ERROR)
     util_funcs.create_work_dir(WORK_DIR)
-    run_event_view()
+    def sigint_handler(signal, frame):
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, sigint_handler)
+    asyncio.run(run_event_view())
