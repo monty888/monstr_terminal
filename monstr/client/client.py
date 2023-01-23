@@ -7,7 +7,6 @@
 from __future__ import annotations
 from typing import Callable
 import logging
-import time
 import aiohttp
 import asyncio
 from gevent import Greenlet
@@ -19,7 +18,6 @@ from json import JSONDecodeError
 from datetime import datetime, timedelta
 from monstr.util import util_funcs
 from monstr.event.event import Event
-from threading import Thread, BoundedSemaphore
 from enum import Enum
 
 
@@ -61,6 +59,7 @@ class Client:
                  on_status: Callable = None,
                  on_eose: Callable = None,
                  on_notice: Callable = None,
+                 on_ok: Callable = None,
                  read: bool = True,
                  write: bool = True,
                  emulate_eose: bool = True,
@@ -94,7 +93,8 @@ class Client:
         self._on_eose = on_eose
         # on recieving any notice events from the relay
         self._on_notice = on_notice
-
+        # nip-20 command infos
+        self._on_ok = on_ok
         # if relay doesn't support eose should we try and emulate it?
         # this is done by calling the eose func when we first recieve events for a sub
         # and then waiting for a delay (2s) after which we assume that is the end of stored events
@@ -184,44 +184,77 @@ class Client:
 
     def _on_message(self, message):
         type = message[0]
-        sub_id = message[1]
         if type == 'EVENT':
-            if self._read:
-                self._do_events(sub_id, message)
+            if len(message) >= 1:
+                sub_id = message[1]
+                if self._read:
+                    self._do_events(sub_id, message)
+            else:
+                logging.debug('Client::_on_message - not enough data in EVENT message - %s ' % message)
+
         elif type == 'NOTICE':
-            # actually notices don't include a sub_id so this is actually the message/err_txt
-            err_text = sub_id
-            # check what other relays do... maybe they'll be some standard that gives more info
-            # as is can't do that much unless we want to look at the text and all realys might have different
-            # text for the same thing so...
-            logging.debug('NOTICE!! %s' % err_text)
-            if self._on_notice:
-                self._on_notice(self, err_text)
-
+            if len(message) >= 1:
+                err_text = message[1]
+                # check what other relays do... maybe they'll be some standard that gives more info
+                # as is can't do that much unless we want to look at the text and all realys might have different
+                # text for the same thing so...
+                logging.debug('NOTICE!! %s' % err_text)
+                if self._on_notice:
+                    self._on_notice(self, err_text)
+            else:
+                logging.debug('Client::_on_message - not enough data in NOTICE message - %s ' % message)
+        elif type == 'OK':
+            self._do_command(message)
         elif type == 'EOSE':
-            # if relay support nip15 you get this event after the relay has sent the last stored event
-            # at the moment a single function but might be better to add as option to subscribe
-            if not self.have_sub(sub_id):
-                logging.debug('Client::_on_message EOSE event for unknown sub_id?!??!! - %s' % sub_id)
-                self.unsubscribe(sub_id)
+            if len(message) >= 1:
+                sub_id = message[1]
+                # if relay support nip15 you get this event after the relay has sent the last stored event
+                # at the moment a single function but might be better to add as option to subscribe
+                if not self.have_sub(sub_id):
+                    logging.debug('Client::_on_message EOSE event for unknown sub_id?!??!! - %s' % sub_id)
+                    self.unsubscribe(sub_id)
 
-            # eose just for the func
-            if self._subs[sub_id]['eose_func'] is not None:
-                self._subs[sub_id]['eose_func'](self, sub_id, self._subs[sub_id]['events'])
+                # eose just for the func
+                if self._subs[sub_id]['eose_func'] is not None:
+                    self._subs[sub_id]['eose_func'](self, sub_id, self._subs[sub_id]['events'])
 
-            # client level eose
-            elif self._on_eose:
-                self._on_eose(self, sub_id, self._subs[sub_id]['events'])
+                # client level eose
+                elif self._on_eose:
+                    self._on_eose(self, sub_id, self._subs[sub_id]['events'])
 
 
-            # no longer needed
-            logging.debug('end of stored events for %s - %s events received' % (sub_id,
-                                                                                len(self._subs[sub_id]['events'])))
-            self._subs[sub_id]['events'] = []
-            self._subs[sub_id]['is_eose'] = True
+                # no longer needed
+                logging.debug('end of stored events for %s - %s events received' % (sub_id,
+                                                                                    len(self._subs[sub_id]['events'])))
+                self._subs[sub_id]['events'] = []
+                self._subs[sub_id]['is_eose'] = True
+            else:
+                logging.debug('Client::_on_message - not enough data in EOSE message - %s ' % message)
 
         else:
             logging.debug('Network::_on_message unexpected type %s' % type)
+
+    def _do_command(self, message):
+        try:
+            if self._on_ok:
+                if len(message) < 3:
+                    raise Exception('Client::_do_command - not enough data in OK message - %s ' % message)
+
+                event_id = message[1]
+                if not Event.is_event_id(event_id):
+                    raise Exception('Client::_do_command - OK message with invalid event_id - %s ' % message)
+
+                success = message[2].lower()
+                if success not in ('true', 'false'):
+                    raise Exception('Client::_do_command - OK message success not valid value - %s ' % message)
+                success = bool(success)
+
+                msg = message[3]
+                self._on_ok(event_id, success, msg)
+            else:
+                logging.debug('Client::_do_command - OK message - %s' % message)
+        except Exception as e:
+            logging.debug(str(e))
 
     def _do_events(self, sub_id, message):
         the_evt: Event
@@ -452,6 +485,22 @@ class Client:
             ret = 'supported_nips' in self._relay_info \
                   and 15 in self._relay_info['supported_nips']
         return ret
+
+    @property
+    def read(self) -> bool:
+        return self._read
+
+    @read.setter
+    def read(self, is_read:bool):
+        self._read = is_read
+
+    @property
+    def write(self) -> bool:
+        return self._write
+
+    @read.setter
+    def read(self, is_write: bool):
+        self._write = is_write
 
     def set_on_status(self, on_status):
         self._on_status = on_status
@@ -1034,19 +1083,28 @@ class ClientPool:
 
     """
 
-    def __init__(self, clients,
-                 on_connect=None,
-                 on_status=None,
-                 on_eose=None):
+    def __init__(self,
+                 clients: str | Client,
+                 on_connect: Callable = None,
+                 on_status: Callable = None,
+                 on_eose: Callable = None,
+                 on_notice: Callable = None,
+                 **kargs
+                 ):
+
         # Clients (Relays) we connecting to
         self._clients = {}
-        # guards access to self._clients
-        self._clients_lock = BoundedSemaphore()
+
         # subscription event handlers keyed on sub ids
         self._handlers = {}
 
+        # any clients methods are just set to come back to us so these are the on_methods
+        # that actually get called. Don't set the methods on the Clients directly
         self._on_connect = on_connect
         self._on_eose = on_eose
+        self._on_notice = on_notice
+
+        # our current run state
         self._state = RunState.init
 
         # merge of status from pool, for example a single client connected means we consider connected to be True
@@ -1065,11 +1123,11 @@ class ClientPool:
 
         for c_client in clients:
             try:
-                the_client = self.add(c_client)
+                self.add(c_client)
             except Exception as e:
                 logging.debug('ClientPool::__init__ - %s' % e)
 
-    def add(self, client, auto_start=True) -> Client:
+    def add(self, client, auto_start=False) -> Client:
         """
         :param auto_start: start the client if the pool is started
         :param client: client, url str or {
@@ -1079,16 +1137,19 @@ class ClientPool:
         }
         :return: Client
         """
-        ret: Client = None
+        the_client: Client = None
+        run_task = None
+
         if isinstance(client, str):
             # read/write default True
-            ret = Client(client,
-                         on_connect=self._on_connect,
-                         on_eose=self._on_eose)
+            the_client = Client(client,
+                                on_connect=self._on_connect,
+                                on_eose=self._on_eose,
+                                on_notice=self._on_notice)
         elif isinstance(client, Client):
-            ret = client
-            ret.set_on_connect(self._on_connect)
-            ret.set_end_stored_events(self._on_eose)
+            the_client = client
+            the_client.set_on_connect(self._on_connect)
+            the_client.set_on_eose(self._on_eose)
         elif isinstance(client, dict):
             read = True
             if 'read' in client:
@@ -1098,18 +1159,18 @@ class ClientPool:
                 write = client['write']
 
             client_url = client['client']
-            ret = Client(client_url,
-                         on_connect=self._on_connect,
-                         on_eose=self._on_eose,
-                         read=read,
-                         write=write)
+            the_client = Client(client_url,
+                                on_connect=self._on_connect,
+                                on_eose=self._on_eose,
+                                read=read,
+                                write=write)
 
-        if ret.url in self._clients:
-            raise Exception('ClientPool::add - %s attempted to add Client that already exists' % ret.url)
+        if the_client.url in self._clients:
+            raise Exception('ClientPool::add - %s attempted to add Client that already exists' % the_client.url)
 
         # error if trying to add when we're stopped or stopping
         if self._state in (RunState.stopping, RunState.stopped):
-            raise Exception('ClientPool::add - can\'t add new client to pool that is stopped or stoping url - %s' % ret.url)
+            raise Exception('ClientPool::add - can\'t add new client to pool that is stopped or stoping url - %s' % the_client.url)
 
         # TODO: here we should go through handlers and add any subscriptions if they have be added via subscribe
         #  method. Need to change the subscrbe to keep a copy of the filter.. NOTE that normally it's better
@@ -1118,7 +1179,7 @@ class ClientPool:
         # we're started so start the new client
         if auto_start is True and self._state in (RunState.starting, RunState.running):
             # starts it if not already running, if it's started and we're not should we do anything?
-            ret.start()
+            run_task = asyncio.create_task(the_client.run())
 
         # for monitoring the relay connection
         def get_on_status(relay_url):
@@ -1126,11 +1187,10 @@ class ClientPool:
                 self._on_pool_status(relay_url, status)
             return on_status
 
-        with self._clients_lock:
-            self._clients[ret.url] = ret
-            ret.set_status_listener(get_on_status(ret.url))
-
-        return ret
+        self._clients[the_client.url] = {
+            'client': the_client,
+            'task': run_task
+        }
 
     def remove(self, client_url: str, auto_stop=True):
         if client_url not in self._clients:
@@ -1240,13 +1300,25 @@ class ClientPool:
         return self._status['connected']
 
     # methods work on all but we'll probably want to be able to name on calls
-    def start(self):
-        self._state = RunState.starting
+    async def start(self):
+        if self._state != RunState.init:
+            raise Exception('ClientPool::start - unexpected state, got %s expected %s' % (self._state,
+                                                                                          RunState.init))
 
-        for c_client in self:
-            c_client.start()
+        self._state = RunState.starting
+        # do starting of the clients
+        for url in self._clients:
+            client_info = self._clients[url]
+            if client_info['task'] is None:
+                client_info['task'] = asyncio.create_task(client_info['client'].run())
+                await client_info['client'].wait_connect()
 
         self._state = RunState.running
+        # now just hang around until state is changed to stopping
+        while self._state not in (RunState.stopping, RunState.stopped):
+            await asyncio.sleep(0.1)
+
+        self._state = RunState.stopped
 
     def end(self):
         self._state = RunState.stopping
@@ -1256,6 +1328,8 @@ class ClientPool:
 
     def subscribe(self, sub_id=None, handlers=None, filters={}):
         c_client: Client
+
+        # same sub_id used for each client, wehere not given it'll be the generated id from the first client
         for c_client in self:
             sub_id = c_client.subscribe(sub_id, self, filters)
 
@@ -1266,12 +1340,26 @@ class ClientPool:
             self._handlers[sub_id] = handlers
         return sub_id
 
-    def query(self, filters=[],
-              do_event=None,
-              wait_connect=False,
-              emulate_single=True,
-              timeout=None,
-              on_complete=None):
+    def unsubscribe(self, sub_id):
+        c_client: Client
+
+        if not self.have_sub(sub_id):
+            return
+
+        for c_client in self.clients:
+            c_client.unsubscribe(sub_id)
+
+        del self._handlers[sub_id]
+
+    def have_sub(self, sub_id: str):
+        return sub_id in self._handlers
+
+    async def query(self, filters=[],
+                    do_event=None,
+                    wait_connect=False,
+                    emulate_single=True,
+                    timeout=None,
+                    on_complete=None):
         """
         similar to the query func, if you don't supply a ret_func we try and act in the same way as a single
         client would but wait for all clients to return and merge results into a single result with duplicate
@@ -1292,35 +1380,35 @@ class ClientPool:
         client_wait = 0
         ret = {}
 
-        def get_q(the_client: Client):
-            def my_func():
-                nonlocal client_wait
-                try:
+        async def get_q(the_client: Client):
+            nonlocal client_wait
+            try:
+                ret[the_client.url] = await the_client.query(filters,
+                                                             do_event=do_event,
+                                                             wait_connect=wait_connect,
+                                                             timeout=timeout)
+                # ret_func(the_client, the_client.query(filters, wait_connect=False))
+            except QueryTimeoutException as toe:
+                logging.debug('ClientPool::query timout - %s ' % toe)
+            except Exception as e:
+                logging.debug('ClientPool::query exception - %s' % e)
+            client_wait -= 1
 
-                    ret[the_client.url] = the_client.query(filters,
-                                                           do_event=do_event,
-                                                           wait_connect=wait_connect,
-                                                           timeout=timeout)
-                    # ret_func(the_client, the_client.query(filters, wait_connect=False))
-                except QueryTimeoutException as toe:
-                    logging.debug('ClientPool::query timout - %s ' % toe)
-                except Exception as e:
-                    logging.debug('ClientPool::query exception - %s' % e)
-                client_wait -= 1
+            if client_wait == 0 and on_complete:
+                on_complete()
 
-                if client_wait == 0 and on_complete:
-                    on_complete()
+        c_client: Client
+        query_tasks = []
 
-            return my_func
-
-        for c_client in self:
+        for c_client in self.clients:
             if c_client.read:
                 client_wait += 1
-                Greenlet(get_q(c_client)).start()
+                query_tasks.append(asyncio.create_task(get_q(c_client)))
 
-        if emulate_single:
-            while client_wait > 0:
-                time.sleep(0.1)
+        while client_wait > 0:
+            await asyncio.sleep(0.1)
+            if ret and not emulate_single:
+                break
 
         return Event.merge(*ret.values())
 
@@ -1335,6 +1423,12 @@ class ClientPool:
                     c_client.publish(evt)
                 except Exception as e:
                     logging.debug(e)
+
+    async def wait_started(self):
+        while self._state != RunState.running:
+            await asyncio.sleep(0.1)
+            if self._state in (RunState.stopping, RunState.stopped):
+                raise Exception('ClientPool::wait_started - bad state when waiting for ClientPool to start, state=%s' % self._state)
 
     def do_event(self, client:Client, sub_id:str, evt):
 
@@ -1362,23 +1456,15 @@ class ClientPool:
 
     @property
     def clients(self):
-        ret = []
-        for c_client in self:
-            # the_client: Client = self._clients[c_client]
-            ret.append({
-                'client': c_client.url,
-                'read': c_client.read,
-                'write': c_client.write
-            })
-        return ret
+        return [self._clients[url]['client'] for url in self._clients]
 
     def __repr__(self):
         return self._clients
 
     def __str__(self):
         ret_arr = []
-        for c_client in self._clients:
-            ret_arr.append(str(self._clients[c_client]['client']))
+        for url in self._clients:
+            ret_arr.append(str(self._clients[url]['client']))
 
         return ', '.join(ret_arr)
 
@@ -1386,22 +1472,13 @@ class ClientPool:
         return len(self._clients)
 
     def __iter__(self) -> Client:
+        for url in self._clients:
+            yield self._clients[url]['client']
 
-        # copy so we don't hold the lock, though this means that we may return clients that get removed/added
-        # whilst we iterate over them
-        with self._clients_lock:
-            clients = [self._clients[c] for c in self._clients]
-
-        for c_client in clients:
-            yield c_client
-
-    def __getitem__(self, i):
-        # row at i
-        return self._clients[i]
-
-    def __enter__(self):
-        self.start()
+    async def __aenter__(self):
+        asyncio.create_task(self.start())
+        await self.wait_started()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.end()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return self

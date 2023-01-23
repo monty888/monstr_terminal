@@ -343,7 +343,7 @@ async def post_loop(relays: [str],
         nonlocal con_status
         if con_status != status['connected']:
             con_status = status['connected']
-            my_gui.draw_messages()
+            asyncio.create_task(my_gui.draw_messages())
 
     def on_eose(the_client: Client, sub_id:str, evts: [Event]):
         Event.sort(evts=evts,

@@ -270,8 +270,8 @@ async def run_watch(config):
             await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
                                                create_missing=True)
 
-            for c_c in as_user.contacts:
-                c_p = await profile_handler.get_profile(c_c.contact_public_key)
+            for f_k in as_user.contacts.follow_keys():
+                c_p = await profile_handler.get_profile(f_k)
                 if c_p:
                     print(c_p.display_name())
                 else:

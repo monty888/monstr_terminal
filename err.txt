@@ -1,0 +1,159 @@
+INFO:root:DataSet:from_CSV: /home/shaun/.nostrpy/profiles.csv
+DEBUG:websockets.client:= connection is CONNECTING
+DEBUG:websockets.client:> GET / HTTP/1.1
+DEBUG:websockets.client:> Host: localhost:8889
+DEBUG:websockets.client:> Upgrade: websocket
+DEBUG:websockets.client:> Connection: Upgrade
+DEBUG:websockets.client:> Sec-WebSocket-Key: 7grK4eON6JCelqO9jgv/6g==
+DEBUG:websockets.client:> Sec-WebSocket-Version: 13
+DEBUG:websockets.client:> Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG:websockets.client:> User-Agent: Python/3.8 websockets/10.4
+DEBUG:websockets.client:< HTTP/1.1 101 Switching Protocols
+DEBUG:websockets.client:< Upgrade: websocket
+DEBUG:websockets.client:< Connection: upgrade
+DEBUG:websockets.client:< Sec-WebSocket-Accept: eDWlf8i3/DhBlDyHTSF6s7lOsW0=
+DEBUG:websockets.client:< Sec-WebSocket-Extensions: permessage-deflate
+DEBUG:websockets.client:< Content-Type: application/octet-stream
+DEBUG:websockets.client:< Date: Mon, 23 Jan 2023 14:02:19 GMT
+DEBUG:websockets.client:< Server: Python/3.8 aiohttp/3.8.3
+DEBUG:websockets.client:= connection is OPEN
+DEBUG:root:Client::run connected ws://localhost:8889
+DEBUG:root:Client::subscribe - ["REQ", "4ef0", {"authors": ["5c4bf3e548683d61fb72be5f48c2dff0cf51901b9dd98ee8db178efe522e325f"], "kinds": [0]}]
+DEBUG:websockets.client:> TEXT '["REQ", "4ef0", {"authors": ["5c4bf3e548683d61f...e325f"], "kinds": [0]}]' [112 bytes]
+DEBUG:websockets.client:< TEXT '["EOSE", "4ef0"]' [16 bytes]
+DEBUG:root:end of stored events for 4ef0 - 0 events received
+DEBUG:root:Client::subscribe - ["REQ", "c245", {"kinds": [1], "limit": 10}]
+DEBUG:websockets.client:> TEXT '["CLOSE", "4ef0"]' [17 bytes]
+DEBUG:websockets.client:> TEXT '["REQ", "c245", {"kinds": [1], "limit": 10}]' [44 bytes]
+DEBUG:websockets.client:< TEXT '["NOTICE", "CLOSE command for sub_id 4ef0 - success"]' [53 bytes]
+DEBUG:root:NOTICE!! CLOSE command for sub_id 4ef0 - success
+DEBUG:websockets.client:< TEXT '["EVENT", "c245", {"id": "86f9c72f6787c96499083...e14f66eefe6100ab414f"}]' [376 bytes]
+DEBUG:websockets.client:< TEXT '["EOSE", "c245"]' [16 bytes]
+DEBUG:root:end of stored events for c245 - 1 events received
+DEBUG:root:Client::subscribe - ["REQ", "3510", {"authors": ["5c4bf3e548683d61fb72be5f48c2dff0cf51901b9dd98ee8db178efe522e325f"], "kinds": [0]}]
+DEBUG:websockets.client:> TEXT '["REQ", "3510", {"authors": ["5c4bf3e548683d61f...e325f"], "kinds": [0]}]' [112 bytes]
+DEBUG:websockets.client:< TEXT '["EOSE", "3510"]' [16 bytes]
+DEBUG:root:end of stored events for 3510 - 0 events received
+DEBUG:websockets.client:> TEXT '["CLOSE", "3510"]' [17 bytes]
+DEBUG:websockets.client:< TEXT '["NOTICE", "CLOSE command for sub_id 3510 - success"]' [53 bytes]
+DEBUG:root:NOTICE!! CLOSE command for sub_id 3510 - success
+DEBUG:root:Client::publish - {'id': '01cfc907c1ef927a2b48ab5414fe45d1dc7f7164b423204846e2ce8a2cceef3f', 'pubkey': '5c4bf3e548683d61fb72be5f48c2dff0cf51901b9dd98ee8db178efe522e325f', 'created_at': 1674482553, 'kind': 1, 'tags': [], 'content': 'a message', 'sig': '3c54a89ca65f2e6fc95a9f0c07e15e458adf025b6a1dcb4f767755bded97b9089d5e64eb69d8f2be3d8b6d30b020d6b7b8c4e306e028537911af50e2cd999311'}
+DEBUG:websockets.client:> TEXT '["EVENT", {"id": "01cfc907c1ef927a2b48ab5414fe4...537911af50e2cd999311"}]' [375 bytes]
+DEBUG:websockets.client:< TEXT '["EVENT", "c245", {"id": "01cfc907c1ef927a2b48a...537911af50e2cd999311"}]' [383 bytes]
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING c4 2b 27 5f [binary, 4 bytes]
+DEBUG:websockets.client:< PONG c4 2b 27 5f [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:root:Client::publish - {'id': '60912454aeb54b248a2c0adde4b02072a6eebf0133a69a3c2ce56c8c15d5db59', 'pubkey': '5c4bf3e548683d61fb72be5f48c2dff0cf51901b9dd98ee8db178efe522e325f', 'created_at': 1674482579, 'kind': 1, 'tags': [], 'content': 'a message that is too long', 'sig': '3b323237d424ee418162d12059a71c8657db9d80f398328c0f3ad9de216b15acecaf353955e355a4181d7cdeeaefc3d6e3f1639c9cf4110f0737bf63edd79a30'}
+DEBUG:websockets.client:> TEXT '["EVENT", {"id": "60912454aeb54b248a2c0adde4b02...110f0737bf63edd79a30"}]' [392 bytes]
+DEBUG:websockets.client:< TEXT '["OK", "60912454aeb54b248a2c0adde4b02072a6eebf0...ccepted max 10 got 26"]' [126 bytes]
+DEBUG:root:Client::_do_command - OK message - ['OK', '60912454aeb54b248a2c0adde4b02072a6eebf0133a69a3c2ce56c8c15d5db59', False, 'blocked: content > accepted max 10 got 26']
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING a2 10 a4 4c [binary, 4 bytes]
+DEBUG:websockets.client:< PONG a2 10 a4 4c [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 0a da 5d 30 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 0a da 5d 30 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING b9 09 d9 b5 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG b9 09 d9 b5 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING a4 67 56 73 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG a4 67 56 73 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING de 12 54 f7 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG de 12 54 f7 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 0e 97 f3 b1 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 0e 97 f3 b1 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 8b 4c 4e 77 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 8b 4c 4e 77 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING a6 c5 68 64 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG a6 c5 68 64 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 77 22 d4 4e [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 77 22 d4 4e [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING c4 3a 44 9d [binary, 4 bytes]
+DEBUG:websockets.client:< PONG c4 3a 44 9d [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 8d 61 be a5 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 8d 61 be a5 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 9f 99 07 07 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 9f 99 07 07 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING f3 f3 19 12 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG f3 f3 19 12 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 04 8e 31 64 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 04 8e 31 64 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING 67 c0 8e a0 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG 67 c0 8e a0 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING b3 e3 2c 51 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG b3 e3 2c 51 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING e9 49 7b 4f [binary, 4 bytes]
+DEBUG:websockets.client:< PONG e9 49 7b 4f [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:websockets.client:! failing connection with code 1006
+DEBUG:websockets.client:= connection is CLOSED
+DEBUG:websockets.client:= connection is CONNECTING
+DEBUG:websockets.client:> GET / HTTP/1.1
+DEBUG:websockets.client:> Host: localhost:8889
+DEBUG:websockets.client:> Upgrade: websocket
+DEBUG:websockets.client:> Connection: Upgrade
+DEBUG:websockets.client:> Sec-WebSocket-Key: +ZYAGM6/lVqEDcaj8jUuUg==
+DEBUG:websockets.client:> Sec-WebSocket-Version: 13
+DEBUG:websockets.client:> Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG:websockets.client:> User-Agent: Python/3.8 websockets/10.4
+DEBUG:websockets.client:< HTTP/1.1 101 Switching Protocols
+DEBUG:websockets.client:< Upgrade: websocket
+DEBUG:websockets.client:< Connection: upgrade
+DEBUG:websockets.client:< Sec-WebSocket-Accept: +t/iUcz2PZCNusU/vRLhQqIPmBs=
+DEBUG:websockets.client:< Sec-WebSocket-Extensions: permessage-deflate
+DEBUG:websockets.client:< Content-Type: application/octet-stream
+DEBUG:websockets.client:< Date: Mon, 23 Jan 2023 14:11:29 GMT
+DEBUG:websockets.client:< Server: Python/3.8 aiohttp/3.8.3
+DEBUG:websockets.client:= connection is OPEN
+DEBUG:root:Client::run connected ws://localhost:8889
+DEBUG:root:Client::subscribe - ["REQ", "c245", {"kinds": [1], "limit": 10}]
+DEBUG:websockets.client:> TEXT '["REQ", "c245", {"kinds": [1], "limit": 10}]' [44 bytes]
+DEBUG:websockets.client:< TEXT '["EOSE", "c245"]' [16 bytes]
+DEBUG:root:end of stored events for c245 - 0 events received
+DEBUG:root:Client::publish - {'id': '4e357f264e5ca02640ebb219c12e809ad54ee5a208ed74c3b1a14c9f9afa9721', 'pubkey': '5c4bf3e548683d61fb72be5f48c2dff0cf51901b9dd98ee8db178efe522e325f', 'created_at': 1674483104, 'kind': 1, 'tags': [], 'content': 'heh there', 'sig': '20271747db380e7654452c7f8f8279d0d0d2323a1a1633cf2afaa6cc7d32f704870affaa9372c2aca93cd07d42a350cd07046aed193a71d9129286f6e7acc606'}
+DEBUG:websockets.client:> TEXT '["EVENT", {"id": "4e357f264e5ca02640ebb219c12e8...71d9129286f6e7acc606"}]' [375 bytes]
+DEBUG:websockets.client:< TEXT '["OK", "4e357f264e5ca02640ebb219c12e809ad54ee5a...c9f9afa9721", true, ""]' [84 bytes]
+DEBUG:websockets.client:< TEXT '["EVENT", "c245", {"id": "4e357f264e5ca02640ebb...71d9129286f6e7acc606"}]' [383 bytes]
+DEBUG:root:Client::_do_command - OK message - ['OK', '4e357f264e5ca02640ebb219c12e809ad54ee5a208ed74c3b1a14c9f9afa9721', True, '']
+DEBUG:websockets.client:% sending keepalive ping
+DEBUG:websockets.client:> PING b1 ab 66 e8 [binary, 4 bytes]
+DEBUG:websockets.client:< PONG b1 ab 66 e8 [binary, 4 bytes]
+DEBUG:websockets.client:% received keepalive pong
+DEBUG:root:Client::publish - {'id': 'ffaf7350f4b07c07bc6dff602a2962770ffcfadd190ae94ffc1c2a352f206c75', 'pubkey': '5c4bf3e548683d61fb72be5f48c2dff0cf51901b9dd98ee8db178efe522e325f', 'created_at': 1674483125, 'kind': 1, 'tags': [], 'content': 'nice that is improvement no?', 'sig': '429d749a32e1f91d8d17ee44ebc1b149291a4b967d10c33705eaea1f480f5c2e6c0ad13b6daac1ac55472ce068e3e27b1e88817f94dc65a8627f6907be710d9a'}
+DEBUG:websockets.client:> TEXT '["EVENT", {"id": "ffaf7350f4b07c07bc6dff602a296...65a8627f6907be710d9a"}]' [394 bytes]
+DEBUG:websockets.client:< TEXT '["OK", "ffaf7350f4b07c07bc6dff602a2962770ffcfad...ccepted max 10 got 28"]' [126 bytes]
+DEBUG:root:Client::_do_command - OK message - ['OK', 'ffaf7350f4b07c07bc6dff602a2962770ffcfadd190ae94ffc1c2a352f206c75', False, 'blocked: content > accepted max 10 got 28']
+DEBUG:websockets.client:= connection is CLOSING
+DEBUG:websockets.client:> CLOSE 1000 (OK) [2 bytes]
+DEBUG:websockets.client:= connection is CLOSED

@@ -38,7 +38,7 @@ SQL_LITE_FILE = '%snostr-relay.db' % WORK_DIR
 PG_USER = 'postgres'
 PG_PASSWORD = 'password'
 PG_DATBASE = 'nostr-relay'
-MAX_SUB = 3
+MAX_SUB = 10
 MAX_CONTENT_LENGTH = None
 
 def usage():
