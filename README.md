@@ -37,7 +37,7 @@ python poster.py --as=<key or alias> --to=<key or alias> hello there
 ```
 plain post in loop mode using a mailbox - only other users with key to the mailbox will be able to view messages: 
 ```shell
-python poster.py -pl --as=samwise --via=nsec1fj2n37y66l848jg0nps9c7axfk3zhmll540plklnxyt2dhga7u5qjzhkyd
+python poster.py -pl --as=<key or alias> --via=<key or alias>
 ```
 # alias
 creates named aliases to keys so they can be referenced by user friendly name.
