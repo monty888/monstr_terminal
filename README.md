@@ -16,8 +16,8 @@ note that the view will be made by looking up the contacts event for the given k
 on the used relays. When a user is given encryped text will automatically be decrypted. 
 
 for other options:
-```
-python run_relay.py --help
+```shell
+python event_view.py --help
 ```
 
 # poster
