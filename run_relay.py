@@ -10,8 +10,6 @@
     Should be easy add addtional EventAccepters e.g. to allow only events from named pubkeys
 
 """
-from gevent import monkey
-monkey.patch_all()
 import logging
 import getopt
 import sys
@@ -249,14 +247,9 @@ def main():
                      max_sub=config['maxsub'],
                      accept_req_handler=accept_handlers,
                      enable_nip15=config['nip15'])
+
     my_relay.start(config['host'], config['port'], config['endpoint'])
 
+
 if __name__ == "__main__":
-
-    def sigint_handler(signal, frame):
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, sigint_handler)
-
-
     main()

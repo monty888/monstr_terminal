@@ -159,7 +159,6 @@ class Client:
                                                        producer_task,
                                                        terminate_task],
                                                        return_when=asyncio.FIRST_EXCEPTION)
-
                     # clean up
                     for task in pending:
                         task.cancel()
@@ -185,7 +184,7 @@ class Client:
             try:
                 self._on_status(self.status)
             except Exception as e:
-                logging.debug('Client::_do_status - %s' %e)
+                logging.debug('Client::_do_status - %s' % e)
 
     async def wait_connect(self, timeout=None):
         wait_time = 0
@@ -201,6 +200,7 @@ class Client:
                 self._on_message(json.loads(msg))
             except JSONDecodeError as je:
                 logging.debug('Client::_my_consumer unable to decode msg - %s' % msg)
+        raise ConnectionError('Client::_my_consumer - server has closed the websocket')
 
     def _on_message(self, message):
         type = message[0]
