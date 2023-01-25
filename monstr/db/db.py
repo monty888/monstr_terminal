@@ -303,7 +303,7 @@ class PostgresDatabase(Database, ABC):
     def placeholder(self):
         return '%s'
 
-
+# TODO - get rid of this
 class QueryFromFilter:
     OR_JOIN = 'OR'
     AND_JOIN = 'AND'

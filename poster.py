@@ -21,7 +21,7 @@ from exception import ConfigException
 # working directory it'll be created it it doesn't exist
 WORK_DIR = '%s/.nostrpy/' % Path.home()
 # relay/s to attach to
-RELAYS = ['ws://localhost:8888']
+RELAYS = ['ws://localhost:8081']
 
 def usage():
     print("""
@@ -61,7 +61,7 @@ def show_post_info(as_user: Profile,
 
 def get_options():
     ret = {
-        'relay': ['ws://localhost:8888'],
+        'relay': RELAYS,
         'is_encrypt': True,
         'ignore_missing': False,
         'user': None,
@@ -282,7 +282,7 @@ async def post_single(relays: [str],
                       subject: str,
                       message: str):
 
-    async with Client(relays[0]) as client:
+    async with ClientPool(relays) as client:
         post_env = await get_poster(client=client,
                                     user_k=user_k,
                                     to_users_k=to_users_k,
@@ -364,7 +364,7 @@ async def post_loop(relays: [str],
     def on_connect(the_client: Client):
         do_sub()
 
-    async with Client(relays[0]) as my_client:
+    async with ClientPool(relays) as my_client:
         peh = NetworkedProfileEventHandler(client=my_client)
         post_env = await get_poster(client=my_client,
                                     user_k=user_k,
@@ -372,6 +372,7 @@ async def post_loop(relays: [str],
                                     inbox_k=inbox_k,
                                     is_encrypt=is_encrypt,
                                     subject=subject)
+
         post_app: PostApp = post_env['post_app']
         my_gui = PostAppGui(post_app,
                             profile_handler=peh)
@@ -379,12 +380,10 @@ async def post_loop(relays: [str],
         my_client.set_on_status(on_status)
         my_client.set_on_eose(on_eose)
         my_client.set_on_connect(on_connect)
+
         # manually call the connect which just adds the sub
         on_connect(my_client)
-
         await my_gui.run()
-        # while True:
-        #     await asyncio.sleep(0.1)
 
 
 async def run_post():

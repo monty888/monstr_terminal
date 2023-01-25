@@ -24,7 +24,7 @@ from exception import ConfigException
 # working directory it'll be created it it doesn't exist
 WORK_DIR = '%s/.nostrpy/' % Path.home()
 # relay/s to attach to
-RELAYS = ['ws://localhost:8888']
+RELAYS = ['ws://localhost:8081']
 
 def usage():
     print("""
@@ -203,6 +203,9 @@ class MyAccept(EventAccepter):
             self._view_keys = self._view_keys + [c_p.public_key for c_p in self._inboxes]
 
     def accept_event(self, evt: Event) -> bool:
+        if evt.kind not in (Event.KIND_ENCRYPT, Event.KIND_TEXT_NOTE):
+            return False
+
         if self._since is not None and evt.created_at < self._since:
             return False
 
