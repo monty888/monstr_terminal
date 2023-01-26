@@ -203,9 +203,6 @@ class MyAccept(EventAccepter):
             self._view_keys = self._view_keys + [c_p.public_key for c_p in self._inboxes]
 
     def accept_event(self, evt: Event) -> bool:
-        if evt.kind not in (Event.KIND_ENCRYPT, Event.KIND_TEXT_NOTE):
-            return False
-
         if self._since is not None and evt.created_at < self._since:
             return False
 
@@ -227,12 +224,8 @@ async def run_watch(config):
     my_client: Client
     relay = config['relay']
 
-    def my_on_notice(the_client: Client, notice_txt: str):
-        if 'max' in notice_txt:
-            print(notice_txt)
-
     # connection thats just used to query profiles as needed
-    my_client = Client(relay[0], on_notice=my_on_notice)
+    my_client = Client(relay[0])
     asyncio.create_task(my_client.run())
     await my_client.wait_connect()
 
