@@ -339,11 +339,22 @@ class MemoryProfileStore(ProfileStoreInterface):
         profiles: [Profile] = []
 
         def _test_match(test_vals: str, in_val):
+            exact = False
+            if isinstance(test_vals, dict):
+                if 'exact' in test_vals:
+                    exact = test_vals['exact']
+                test_vals = test_vals['values']
+
+            if isinstance(test_vals, str):
+                test_vals = test_vals.split(',')
+
             ret = False
             if in_val is not None:
                 in_val = in_val.lower()
-                for t_val in [v.lower() for v in test_vals.split(',')]:
-                    ret = t_val in in_val
+                for t_val in [v.lower() for v in test_vals]:
+                    ret = exact is False and t_val in in_val \
+                          or exact is True and t_val == in_val
+
                     if ret:
                         break
             return ret

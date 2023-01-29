@@ -20,7 +20,10 @@ class ProfileFileAlias:
     def get_profile(self, profile_name: str):
         ret = None
         matches = self._store.select_profiles(filter={
-            'profile_name': profile_name
+            'profile_name': {
+                'exact': True,
+                'values': profile_name
+            }
         })
         if matches:
             ret = matches[0]
