@@ -31,7 +31,6 @@ ALIAS_FILE = WORK_DIR + 'profiles.csv'
 # how far to fetch metas back too in days
 DEFAULT_SINCE = 5
 
-
 def get_args():
     parser = argparse.ArgumentParser(
         prog='profile_search.py',
@@ -68,37 +67,53 @@ def get_args():
         for c_k in ret.bootstrap.split(','):
             k = Keys.get_key(c_k)
             if k is None:
-                p = my_alias.get_profile(c_k)
                 if p is None:
                     raise ConfigurationError('bootstrap - %s not nostr key and no matching alias' % c_k)
                 k = p.keys
             boot_keys.append(k)
+        ret.bootstrap = boot_keys
 
     return ret
 
 
-async def display_profile(p: Profile, short_form=True, key_output='npub'):
+async def display_profile(p: Profile, output: str='short', key_output='npub'):
+
+
     pub_key = p.keys.public_key_bech32()
     if key_output != 'npub':
         pub_key = p.keys.public_key_hex()
 
-    if short_form:
+    if output == 'short':
         await aioconsole.aprint(p.display_name(False)[0:15].rjust(15), ' - ', pub_key)
-    else:
-        await aioconsole.aprint('***** %s ******' % p.display_name())
-        await aioconsole.aprint('keys\n')
-        await aioconsole.aprint('npub: %s' % p.keys.public_key_bech32())
-        await aioconsole.aprint('hex:  %s' % p.public_key)
+    elif output == 'long':
+        margin = 10
+        await aioconsole.aprint('%s - %s' % ('name'.ljust(margin),
+                                             p.display_name()))
+        await aioconsole.aprint('%s - %s' % ('npub'.ljust(margin),
+                                             p.keys.public_key_bech32()))
+        await aioconsole.aprint('%s - %s' % ('hex'.ljust(margin),
+                                             p.public_key))
         if p.get_attr('about'):
-            await aioconsole.aprint('\nabout\n')
-            await aioconsole.aprint('%s' % p.get_attr('about'))
-        await aioconsole.aprint('')
+            await aioconsole.aprint('%s - %s' % ('about'.ljust(margin),
+                                                 p.get_attr('about')))
         if p.get_attr('picture'):
-            await aioconsole.aprint('\npicture\n')
-            await aioconsole.aprint('%s' % p.get_attr('picture'))
+            await aioconsole.aprint('%s - %s' % ('picture'.ljust(margin),
+                                                 p.get_attr('picture')))
         if p.get_attr('banner'):
-            await aioconsole.aprint('\nbanner\n')
-            await aioconsole.aprint('%s' % p.get_attr('banner'))
+            await aioconsole.aprint('%s - %s' % ('banner'.ljust(margin),
+                                                 p.get_attr('banner')))
+
+        for c_attr in p.attrs:
+            if c_attr not in ('picture', 'banner', 'name', 'about'):
+                await aioconsole.aprint('%s - %s' % (('%s' % c_attr).ljust(margin),
+                                                     p.get_attr(c_attr)))
+
+        await aioconsole.aprint('%s - %s' % ('link'.ljust(margin),
+                                             'https://hamstr.to/profile/%s' % p.keys.public_key_bech32()))
+
+
+    else:
+        await aioconsole.aprint(p.as_dict())
 
 
 class My_EventHandler(EventHandler):
@@ -203,15 +218,47 @@ async def do_search():
     #     print('initial events loaded...')
 
     async def do_command(cmd: str):
-        if cmd in ('count'):
-            if cmd == 'count':
-                print('%s profiles in store' % len(profile_store.select_profiles()))
+        cmd_split = cmd.split()
+        cmd = cmd_split[0]
+        args = cmd_split[1:]
+
+        async def _show_profile():
+            output = 'long'
+            if cmd == 'raw':
+                output = 'json'
+
+            if args:
+                to_show = []
+                for c_a in args:
+                    k = Keys.get_key(c_a)
+                    if k is None:
+                        await aioconsole.aprint('%s is not a valid nostr key' % c_a)
+                    else:
+                        to_show.append(k)
+                p: Profile
+                for c_k in to_show:
+                    p = await peh.get_profile(c_k.public_key_hex())
+                    if p:
+                        await display_profile(p, output=output)
+                    else:
+                        await aioconsole.aprint('profile not found for key - %s' % c_k.public_key_bech32())
+
+            else:
+                await aioconsole.aprint('no keys supplied')
+
+        if cmd == 'count':
+            await aioconsole.aprint('%s profiles in store' % len(profile_store.select_profiles()))
+        elif cmd == 'profile':
+            await _show_profile()
+        elif cmd == 'raw':
+            await _show_profile()
         else:
-            aioconsole.aprint('unknown command - %s' % cmd)
+            await aioconsole.aprint('unknown command - %s' % cmd)
 
     # start the client
     my_client = ClientPool(relay)
     asyncio.create_task(my_client.start())
+    await my_client.wait_started()
     peh = NetworkedProfileEventHandler(client=my_client,
                                        store=profile_store)
     my_handler = My_EventHandler(
@@ -226,7 +273,13 @@ async def do_search():
     if 'boot_keys' in args:
         boot_pubs = boot_pubs + [k.public_key_hex() for k in args.bookeys]
     # actually fetch
-    await peh.get_profiles(boot_pubs)
+    await my_client.query({
+        'kinds': [Event.KIND_CONTACT_LIST, Event.KIND_META],
+        'authors': boot_pubs
+        },
+        do_event=my_handler.do_event
+    )
+
     # now add
     my_client.set_on_connect(on_connect)
     do_sub()
@@ -236,11 +289,10 @@ async def do_search():
     while msg != 'exit':
         msg = await aioconsole.ainput('> ')
         msg = msg.lower()
-        cmd = msg.replace(' ', '')
-        if cmd == 'exit':
+        if msg.replace(' ','') == 'exit':
             continue
-        elif cmd and cmd[0] == '$':
-            await do_command(cmd[1:])
+        elif msg and msg[0] == '$':
+            await do_command(msg[1:])
         else:
             search_filter = {}
             if msg:
