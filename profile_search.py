@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from monstr.util import util_funcs
 from monstr.ident.persist import MemoryProfileStore
 from monstr.ident.event_handlers import NetworkedProfileEventHandler
-from monstr.ident.profile import Profile
+from monstr.ident.profile import Profile, Contact
 from monstr.event.persist import ClientSQLiteEventStore
 from monstr.ident.alias import ProfileFileAlias
 from monstr.event.event_handlers import StoreEventHandler
@@ -191,7 +191,7 @@ async def do_search():
     # we'll look at events since here and onwards as we run to get pub_ks
     # you probably don't want to do many as it could be a lot of events
     since = util_funcs.date_as_ticks(datetime.now() - timedelta(minutes=args.since))
-    as_user = None
+    as_user:Profile = None
     sub_id = None
 
     def do_sub():
@@ -221,15 +221,17 @@ async def do_search():
         cmd_split = cmd.split()
         cmd = cmd_split[0]
         args = cmd_split[1:]
+        output_formats = ('long', 'json', 'short')
 
         async def _show_profile():
-            output = 'long'
-            if cmd == 'raw':
-                output = 'json'
+            if output not in output_formats:
+                await aioconsole.aprint('invalid output format %s - valid values %s' % (output,
+                                                                                        output_formats))
+                return
 
             if args:
                 to_show = []
-                for c_a in args:
+                for c_a in args[0].split(','):
                     k = Keys.get_key(c_a)
                     if k is None:
                         await aioconsole.aprint('%s is not a valid nostr key' % c_a)
@@ -249,9 +251,53 @@ async def do_search():
         if cmd == 'count':
             await aioconsole.aprint('%s profiles in store' % len(profile_store.select_profiles()))
         elif cmd == 'profile':
+            output = 'long'
+            if len(args) > 1:
+                output = args[1]
             await _show_profile()
-        elif cmd == 'raw':
-            await _show_profile()
+        elif cmd == 'contacts':
+            output = 'short'
+            for_user = as_user
+            if len(args) == 1:
+                k = Keys.get_key(args[0])
+                if k:
+                    for_user = await peh.get_profile(k.public_key_hex())
+                else:
+                    output = args[0]
+            elif len(args) == 2:
+                k = Keys.get_key(args[0])
+                if k:
+                    for_user = await peh.get_profile(k.public_key_hex())
+                output = args[1]
+            if for_user:
+                await peh.load_contacts(for_user)
+                c_contact: Contact
+                await peh.get_profiles([c_contact.contact_public_key for c_contact in for_user.contacts],
+                                       create_missing=True)
+                for c_contact in for_user.contacts:
+                    c_p = await peh.get_profile(c_contact.contact_public_key)
+                    await display_profile(c_p, output=output)
+            else:
+                await aioconsole.aprint('unable to get for_user for contacts')
+        elif cmd == 'posts':
+            for_user = as_user
+            if args:
+                k = Keys.get_key(args[0])
+                if k:
+                    for_user = await peh.get_profile(k.public_key_hex())
+            if for_user:
+                events = await my_client.query({
+                    'authors': [for_user.public_key],
+                    'kinds': [Event.KIND_TEXT_NOTE],
+                    'limit': 10
+                })
+                c_evt: Event
+                for c_evt in events:
+                    await aioconsole.aprint('%s@%s' % (util_funcs.str_tails(c_evt.id), c_evt.created_at))
+                    await aioconsole.aprint(c_evt.content)
+            else:
+                await aioconsole.aprint('unable to get for_user for post')
+
         else:
             await aioconsole.aprint('unknown command - %s' % cmd)
 
@@ -272,6 +318,7 @@ async def do_search():
         boot_pubs.append(args.as_user.public_key_hex())
     if 'boot_keys' in args:
         boot_pubs = boot_pubs + [k.public_key_hex() for k in args.bookeys]
+
     # actually fetch
     await my_client.query({
         'kinds': [Event.KIND_CONTACT_LIST, Event.KIND_META],
@@ -279,6 +326,11 @@ async def do_search():
         },
         do_event=my_handler.do_event
     )
+
+    if 'as_user' in args:
+        as_user = await peh.get_profile(args.as_user.public_key_hex(), create_missing=True)
+        await aioconsole.aprint('running as - %s' % as_user.display_name())
+        await peh.load_contacts(as_user)
 
     # now add
     my_client.set_on_connect(on_connect)
