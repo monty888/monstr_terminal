@@ -100,6 +100,7 @@ async def get_from_config(config,
 
         as_user = await profile_handler.get_profile(user_key.public_key_hex(),
                                                     create_missing=True)
+
         # if we were given a private key then we'll attach it to the profile so it can decode msgs
         if user_key.private_key_hex():
             as_user.private_key = user_key.private_key_hex()
@@ -107,8 +108,10 @@ async def get_from_config(config,
         if not as_user:
             raise ConfigException('unable to find/create as_user profile - %s' % config['as_user'])
 
+        print('contact shit')
         c_c: Contact
         contacts = await profile_handler.load_contacts(as_user)
+        print('sad')
         if contacts:
             contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
                                                             create_missing=True)
@@ -230,7 +233,6 @@ async def run_watch(config):
     await my_client.wait_connect()
 
     profile_handler = NetworkedProfileEventHandler(client=my_client)
-
     # pop the config
     try:
         config = await get_from_config(config, profile_handler)
@@ -288,7 +290,6 @@ async def run_watch(config):
         print('showing events from now minus %s hours' % since)
         if until:
             print('until %s hours from this point' % until)
-
     # show run info
     await print_run_info()
     # change to since to point in time

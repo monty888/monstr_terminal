@@ -12,6 +12,7 @@ from monstr.ident.profile import Profile, Contact
 from monstr.event.persist import ClientSQLiteEventStore
 from monstr.ident.alias import ProfileFileAlias
 from monstr.event.event_handlers import StoreEventHandler
+from cmd_line.util import FormattedEventPrinter
 from monstr.client.event_handlers import EventHandler
 from monstr.client.client import ClientPool, Client
 from monstr.event.event import Event
@@ -30,6 +31,7 @@ DB = WORK_DIR + 'monstr.db'
 ALIAS_FILE = WORK_DIR + 'profiles.csv'
 # how far to fetch metas back too in days
 DEFAULT_SINCE = 5
+
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -76,15 +78,41 @@ def get_args():
     return ret
 
 
-async def display_profile(p: Profile, output: str='short', key_output='npub'):
+async def display_profile(p: Profile,
+                          profile_handler,
+                          as_user,
+                          output: str='short',
+                          key_output='npub'):
+    follows = ''
+    follow_folow_count = ''
+    c_contact: Contact
+    f_p: Profile
 
+    if as_user:
+        if not as_user.contacts_is_set():
+            profile_handler.load_contacts(as_user)
+        # for marking those we follow
+        if p.public_key in as_user.contacts.follow_keys():
+            follows = 'F'
+
+        count_ff = 0
+
+        await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
+                                           create_missing=True)
+        for c_k in as_user.contacts.follow_keys():
+            f_p = await profile_handler.get_profile(c_k)
+            if f_p.contacts_is_set():
+                if p.public_key in set(f_p.contacts.follow_keys()):
+                    count_ff += 1
+
+        follow_folow_count = 'FF%s' % count_ff
 
     pub_key = p.keys.public_key_bech32()
     if key_output != 'npub':
         pub_key = p.keys.public_key_hex()
 
     if output == 'short':
-        await aioconsole.aprint(p.display_name(False)[0:15].rjust(15), ' - ', pub_key)
+        await aioconsole.aprint(p.display_name(False)[0:15].rjust(15), ' - ', pub_key, ' ', follows, ' ', follow_folow_count)
     elif output == 'long':
         margin = 10
         await aioconsole.aprint('%s - %s' % ('name'.ljust(margin),
@@ -175,8 +203,16 @@ class My_EventHandler(EventHandler):
             self._my_task = asyncio.create_task(do_fetches())
 
 
-async def do_time_back_fill():
-    pass
+async def init_user(user:Keys, profile_handler) -> Profile:
+    ret: Profile = await profile_handler.get_profile(user.public_key_hex(),
+                                                    create_missing=True)
+    await aioconsole.aprint('running as - %s' % ret.display_name())
+    await profile_handler.load_contacts(ret)
+
+    # init contacts for those we follow too
+    asyncio.create_task(profile_handler._fetch_contacts(ret.contacts.follow_keys()))
+
+    return ret
 
 
 async def do_search():
@@ -191,7 +227,7 @@ async def do_search():
     # we'll look at events since here and onwards as we run to get pub_ks
     # you probably don't want to do many as it could be a lot of events
     since = util_funcs.date_as_ticks(datetime.now() - timedelta(minutes=args.since))
-    as_user:Profile = None
+    as_user: Profile = None
     sub_id = None
 
     def do_sub():
@@ -241,7 +277,10 @@ async def do_search():
                 for c_k in to_show:
                     p = await peh.get_profile(c_k.public_key_hex())
                     if p:
-                        await display_profile(p, output=output)
+                        await display_profile(p,
+                                              output=output,
+                                              profile_handler=peh,
+                                              as_user=as_user)
                     else:
                         await aioconsole.aprint('profile not found for key - %s' % c_k.public_key_bech32())
 
@@ -270,13 +309,17 @@ async def do_search():
                     for_user = await peh.get_profile(k.public_key_hex())
                 output = args[1]
             if for_user:
-                await peh.load_contacts(for_user)
+                if not for_user.contacts_is_set():
+                    await peh.load_contacts(for_user)
                 c_contact: Contact
                 await peh.get_profiles([c_contact.contact_public_key for c_contact in for_user.contacts],
                                        create_missing=True)
                 for c_contact in for_user.contacts:
                     c_p = await peh.get_profile(c_contact.contact_public_key)
-                    await display_profile(c_p, output=output)
+                    await display_profile(c_p,
+                                          profile_handler=peh,
+                                          as_user=as_user,
+                                          output=output)
             else:
                 await aioconsole.aprint('unable to get for_user for contacts')
         elif cmd == 'posts':
@@ -293,8 +336,9 @@ async def do_search():
                 })
                 c_evt: Event
                 for c_evt in events:
-                    await aioconsole.aprint('%s@%s' % (util_funcs.str_tails(c_evt.id), c_evt.created_at))
-                    await aioconsole.aprint(c_evt.content)
+                    await post_printer.print_event(c_evt)
+                    # await aioconsole.aprint('%s@%s' % (util_funcs.str_tails(c_evt.id), c_evt.created_at))
+                    # await aioconsole.aprint(c_evt.content)
             else:
                 await aioconsole.aprint('unable to get for_user for post')
 
@@ -303,7 +347,7 @@ async def do_search():
 
     # start the client
     my_client = ClientPool(relay)
-    asyncio.create_task(my_client.start())
+    asyncio.create_task(my_client.run())
     await my_client.wait_started()
     peh = NetworkedProfileEventHandler(client=my_client,
                                        store=profile_store)
@@ -314,9 +358,9 @@ async def do_search():
 
     # do as_user and boot user lookups before subscribing
     boot_pubs = []
-    if 'as_user' in args:
+    if args.as_user:
         boot_pubs.append(args.as_user.public_key_hex())
-    if 'boot_keys' in args:
+    if args.bootstrap:
         boot_pubs = boot_pubs + [k.public_key_hex() for k in args.bookeys]
 
     # actually fetch
@@ -327,11 +371,13 @@ async def do_search():
         do_event=my_handler.do_event
     )
 
-    if 'as_user' in args:
-        as_user = await peh.get_profile(args.as_user.public_key_hex(), create_missing=True)
-        await aioconsole.aprint('running as - %s' % as_user.display_name())
-        await peh.load_contacts(as_user)
+    if args.as_user:
+        as_user = await init_user(args.as_user,
+                                  peh)
 
+    # used by $posts
+    post_printer = FormattedEventPrinter(profile_handler=peh,
+                                         as_user=as_user)
     # now add
     my_client.set_on_connect(on_connect)
     do_sub()
@@ -355,7 +401,9 @@ async def do_search():
             matches = profile_store.select_profiles(search_filter)
             if matches:
                 for c_m in matches:
-                    await display_profile(c_m)
+                    await display_profile(c_m,
+                                          profile_handler=peh,
+                                          as_user=as_user)
             else:
                 await aioconsole.aprint('no matches found!')
 
