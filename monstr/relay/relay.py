@@ -24,7 +24,7 @@ from monstr.relay.exceptions import NostrCommandException, NostrNoticeException
 
 class Relay:
     """
-        implements monstr relay protocol
+        implements nostr relay protocol
         NIP-01      -   basic protocol
                         https://github.com/fiatjaf/nostr/blob/master/nips/01.md
         NIP-02      -   contact list
@@ -33,14 +33,12 @@ class Relay:
                         delete_mode=DeleteMode.DEL_FLAG probbably best option as this will mark the event as deleted
                         but also it won't be possible to repost.
                         https://github.com/fiatjaf/nostr/blob/master/nips/09.md
-        NIP-11      -   TODO: Relay Information Document
+        NIP-11      -   relay information document
                         https://github.com/fiatjaf/nostr/blob/master/nips/11.md
-        NIP-12          generic querie tags, todo but should be easy.... test with shared
+        NIP-12      -   generic tag queries
                         https://github.com/fiatjaf/nostr/blob/master/nips/12.md
-
         NIP-15      -   send 'EOSE' msg after sending the final event for a subscription
                         https://github.com/nostr-protocol/nips/blob/master/15.md
-
         NIP-16      -   ephemeral and replaceable events, depends on the store
                         https://github.com/nostr-protocol/nips/blob/master/16.md
 

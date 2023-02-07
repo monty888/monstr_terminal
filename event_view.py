@@ -108,10 +108,8 @@ async def get_from_config(config,
         if not as_user:
             raise ConfigException('unable to find/create as_user profile - %s' % config['as_user'])
 
-        print('contact shit')
         c_c: Contact
         contacts = await profile_handler.load_contacts(as_user)
-        print('sad')
         if contacts:
             contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
                                                             create_missing=True)
@@ -228,7 +226,7 @@ async def run_watch(config):
     relay = config['relay']
 
     # connection thats just used to query profiles as needed
-    my_client = Client(relay[0])
+    my_client = ClientPool(relay)
     asyncio.create_task(my_client.run())
     await my_client.wait_connect()
 
@@ -380,8 +378,10 @@ async def run_watch(config):
     # we end and reconnect - bit hacky but just makes thing easier to set in action
     my_client.set_on_eose(my_eose)
     my_client.set_on_connect(my_connect)
-    # because we're already connected we'll call manually
-    my_connect(my_client)
+    for c_client in my_client:
+        # because we're already connected we'll call manually
+        if c_client.connected:
+            my_connect(c_client)
 
     while True:
         await asyncio.sleep(0.1)
