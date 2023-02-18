@@ -10,6 +10,7 @@
     Should be easy add addtional EventAccepters e.g. to allow only events from named pubkeys
 
 """
+import asyncio
 import logging
 import getopt
 import sys
@@ -21,8 +22,7 @@ from toml import TomlDecodeError
 
 from monstr.relay.relay import Relay
 from monstr.relay.accept_handlers import LengthAcceptReqHandler
-from monstr.event.persist import RelayMemoryEventStore, RelaySQLiteEventStore, RelayPostgresEventStore
-
+from monstr.event.persist import RelayMemoryEventStore, ARelaySQLiteEventStore, RelayPostgresEventStore
 # default values when nothing is specified either from cmd line or config file
 HOST = 'localhost'
 PORT = 8081
@@ -66,7 +66,8 @@ def create_work_dir():
         logging.info('create_work_dir:: attempting to create %s' % WORK_DIR)
         os.makedirs(WORK_DIR)
 
-def get_sql_store(filename, is_nip16):
+
+async def get_sql_store(filename, is_nip16):
     f = Path(filename)
 
     parent_dir = f.parts[len(f.parts)-2]
@@ -81,11 +82,11 @@ def get_sql_store(filename, is_nip16):
     # if the file doesn't exist it'll be created and we'll create the db struct too
     # if it does we'll assume everything is ok...we could do more
 
-    ret = RelaySQLiteEventStore(filename,
-                                is_nip16=is_nip16)
+    ret = ARelaySQLiteEventStore(filename,
+                                 is_nip16=is_nip16)
     if not ret.exists():
         logging.info('get_sql_store::create new db %s' % filename)
-        ret.create()
+        await ret.create()
     else:
         logging.info('get_sql_store::open existing db %s' % filename)
 
@@ -117,7 +118,7 @@ def load_toml(filename):
     return ret
 
 
-def main():
+async def main():
     is_wipe = False
     create_work_dir()
 
@@ -214,7 +215,7 @@ def main():
 
     # create storage object which is either to sqllite, posgres or transient
     if config['store'] == 'sqlite':
-        my_store = get_sql_store(config['dbfile'], config['nip16'])
+        my_store = await get_sql_store(config['dbfile'], config['nip16'])
     elif config['store'] == 'postgres':
         my_store = get_postgres_store(db_name=config['pg_database'],
                                       user=config['pg_user'],
@@ -248,8 +249,7 @@ def main():
                      accept_req_handler=accept_handlers,
                      enable_nip15=config['nip15'])
 
-    my_relay.start(config['host'], config['port'], config['endpoint'])
-
+    await my_relay.start(config['host'], config['port'], config['endpoint'])
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

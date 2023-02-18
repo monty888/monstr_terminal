@@ -1,7 +1,6 @@
 import logging
 import asyncio
 import sys
-
 import aioconsole
 import argparse
 from datetime import datetime, timedelta
@@ -9,9 +8,7 @@ from monstr.util import util_funcs
 from monstr.ident.persist import MemoryProfileStore
 from monstr.ident.event_handlers import NetworkedProfileEventHandler
 from monstr.ident.profile import Profile, Contact
-from monstr.event.persist import ClientSQLiteEventStore
 from monstr.ident.alias import ProfileFileAlias
-from monstr.event.event_handlers import StoreEventHandler
 from cmd_line.util import FormattedEventPrinter
 from monstr.client.event_handlers import EventHandler
 from monstr.client.client import ClientPool, Client
@@ -24,7 +21,7 @@ from pathlib import Path
 # working directory it'll be created it it doesn't exist
 WORK_DIR = '%s/.nostrpy/' % Path.home()
 # relay/s to attach to
-DEFAULT_RELAY = 'wss://nostr-pub.wellorder.net'
+DEFAULT_RELAY = 'ws://localhost:8081'
 # profiles persited here sqlite db
 DB = WORK_DIR + 'monstr.db'
 # nmae > key alias here
@@ -246,6 +243,7 @@ async def do_search():
             filters=filters)
 
     def on_connect(the_client: Client):
+        print('connect!!!??!?!?!?')
         do_sub()
 
     # def my_eose(the_client: Client, sub_id: str, events: [Event]):
@@ -348,7 +346,7 @@ async def do_search():
     # start the client
     my_client = ClientPool(relay)
     asyncio.create_task(my_client.run())
-    await my_client.wait_started()
+    await my_client.wait_connect(timeout=10)
     peh = NetworkedProfileEventHandler(client=my_client,
                                        store=profile_store)
     my_handler = My_EventHandler(

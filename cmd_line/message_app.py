@@ -18,16 +18,16 @@ from prompt_toolkit.widgets import VerticalLine, Button,TextArea, HorizontalLine
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
-from nostr.ident.profile import Profile, UnknownProfile, ProfileList
-from nostr.client.event_handlers import ProfileEventHandler
-from nostr.ident.persist import SQLProfileStore, MemoryProfileStore
-from nostr.client.event_handlers import PersistEventHandler
-from nostr.event.event import Event
-from nostr.client.client import Client
+from monstr.ident.profile import Profile, UnknownProfile, ProfileList
+from monstr.ident.event_handlers import ProfileEventHandler
+from monstr.ident.persist import SQLProfileStore, MemoryProfileStore
+from monstr.event.event_handlers import EventHandler
+from monstr.event.event import Event
+from monstr.client.client import Client
 # from nostr.client.persist import SQLEventStore, TransientEventStore
-from nostr.event.persist import ClientSQLEventStore, ClientMemoryEventStore
-from nostr.client.messaging import MessageThreads
-from db.db import Database
+from monstr.event.persist import ClientSQLiteEventStore, MemoryEventStore
+from monstr.client.messaging import MessageThreads
+from monstr.db.db import Database
 
 def is_left_click(e):
     return e.event_type == MouseEventType.MOUSE_DOWN and e.button == MouseButton.LEFT

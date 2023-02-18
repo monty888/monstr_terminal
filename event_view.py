@@ -228,7 +228,7 @@ async def run_watch(config):
     # connection thats just used to query profiles as needed
     my_client = ClientPool(relay)
     asyncio.create_task(my_client.run())
-    await my_client.wait_connect()
+    await my_client.wait_connect(timeout=10)
 
     profile_handler = NetworkedProfileEventHandler(client=my_client)
     # pop the config

@@ -282,7 +282,7 @@ async def post_single(relays: [str],
                       subject: str,
                       message: str):
 
-    async with ClientPool(relays) as client:
+    async with ClientPool(relays, timeout=10) as client:
         post_env = await get_poster(client=client,
                                     user_k=user_k,
                                     to_users_k=to_users_k,
@@ -303,6 +303,8 @@ async def post_single(relays: [str],
                        msg=message)
 
         post_app.do_post(msg=message)
+        # hack to give time for the event to be sent
+        await asyncio.sleep(1)
 
 
 async def post_loop(relays: [str],

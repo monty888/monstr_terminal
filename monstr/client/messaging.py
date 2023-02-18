@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-	from monstr.event.persist import ClientEventStoreInterface
+	from monstr.event.old_persist import ClientEventStoreInterface
 """
     abstract some of the functionality we need in order to messages between people other monstr protocal
 
