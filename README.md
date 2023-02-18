@@ -1,3 +1,10 @@
+# install
+> git clone https://github.com/monty888/monstr_terminal.git  
+> cd monstr_terminal  
+> python3 -m venv venv  
+> source venv/bin/activate  
+> pip install -r requirements.txt
+
 # event view
 view text and encrypted text events as they arrive at relay and back to a set number of hours.
 Also supports viewing of events that have been encrypted and wrapped into an inbox account. 
