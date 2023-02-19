@@ -93,10 +93,11 @@ async def get_sql_store(filename, is_nip16):
     return ret
 
 
-def get_postgres_store(db_name, user, password):
+def get_postgres_store(db_name, user, password, is_nip16):
     ret = RelayPostgresEventStore(db_name=db_name,
                                   user=user,
-                                  password=password)
+                                  password=password,
+                                  is_nip16=is_nip16)
 
     if not ret.exists():
         ret.create()
@@ -134,7 +135,8 @@ async def main():
                                                            'maxlength=',
                                                            'wipe',
                                                            'nip15',
-                                                           'nip16'])
+                                                           'nip16',
+                                                           'nip20'])
     except getopt.GetoptError as e:
         print(e)
         usage()
@@ -164,7 +166,8 @@ async def main():
         'pg_user': PG_USER,
         'pg_password': PG_PASSWORD,
         'nip15': True,
-        'nip16': True
+        'nip16': True,
+        'nip20': True
     }
     config.update(load_toml(config_file))
 
@@ -195,6 +198,8 @@ async def main():
             config['nip15'] = False
         elif o in ('--nip16'):
             config['nip16'] = False
+        elif o in ('--nip20'):
+            config['nip20'] = False
 
     # make sure items that need to be ints are
     for num_field in ('port', 'maxsub', 'maxlength'):
@@ -215,22 +220,29 @@ async def main():
 
     # create storage object which is either to sqllite, posgres or transient
     if config['store'] == 'sqlite':
-        my_store = await get_sql_store(config['dbfile'], config['nip16'])
+        my_store = await get_sql_store(filename=config['dbfile'],
+                                       is_nip16=config['nip16'])
     elif config['store'] == 'postgres':
         my_store = get_postgres_store(db_name=config['pg_database'],
                                       user=config['pg_user'],
-                                      password=config['pg_password'])
+                                      password=config['pg_password'],
+                                      is_nip16=config['nip16'])
+        # blank the password from printout
+        config['pg_password'] = '***'
+
     elif config['store'] == 'transient':
         my_store = RelayMemoryEventStore(is_nip16=config['nip16'])
+    elif config['store'] == 'none':
+        my_store = None
     else:
-        print('--store most be sqlite, postgres or transient')
+        print('--store most be sqlite, postgres, transient or None')
         sys.exit(2)
 
     if is_wipe:
-        if config['store'] != 'transient':
+        if config['store'] not in ('transient', 'none'):
             my_store.destroy()
         else:
-            print('transient store, no action required!')
+            print('%s store, no action required!' % config['store'])
         sys.exit(0)
 
     # optional message accept handlers
@@ -241,13 +253,12 @@ async def main():
     for c_handler in accept_handlers:
         logging.info(c_handler)
 
-    # now we have config run the relay
-    config['pg_password'] = '***'
     logging.debug('config = %s' % config)
     my_relay = Relay(my_store,
                      max_sub=config['maxsub'],
                      accept_req_handler=accept_handlers,
-                     enable_nip15=config['nip15'])
+                     enable_nip15=config['nip15'],
+                     ack_events=config['nip20'])
 
     await my_relay.start(config['host'], config['port'], config['endpoint'])
 
