@@ -49,7 +49,7 @@ usage: python run_relay.py --host=localhost --port=8081
 --host      -   host relay will listen websocket at, default %s
 --port      -   port relay will listen websocket on, default %s
 --endpoint  -   endpoint relay will listen websocket on, default %s
--s --store  -   storage type where relay will persist events etc. either sqllite, postgres or transient default %s
+-s --store  -   storage type where relay will persist events etc. either sqllite, postgres, transient or none, default %s
 --dbfile    -   when --store is sqlite the db file for the database, default:
                 %s
                 when using dir .nostrpy dir it will be created if it doesn't exist already - other dirs wont and
@@ -57,7 +57,8 @@ usage: python run_relay.py --host=localhost --port=8081
 --maxsub    -   maximum open subs allowed per client websocket, default %s
 --maxlength -   maximum length for event content if any
 --nip15     -   disable NIP15 - End Of Stored Events(EOSE) 
---nip16     -   disable NIP16 - Event treatment, ephemeral and replaceable event ranges as 
+--nip16     -   disable NIP16 - Event treatment, ephemeral and replaceable event ranges as
+--nip20     -   disable NIP20 - OK command events  
   
     """ % (HOST, PORT, END_POINT, DB_TYPE, SQL_LITE_FILE, MAX_SUB))
 
