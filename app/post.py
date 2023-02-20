@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 import json
 import hashlib
-from collections import OrderedDict
+from monstr.client.event_handlers import DeduplicateAcceptor, DuplicateContentAcceptor, NotOnlyNumbersAcceptor
 from monstr.encrypt import SharedEncrypt
 from monstr.event.event import Event
 from monstr.ident.profile import Profile
@@ -94,8 +94,13 @@ class PostApp:
         self._is_encrypt = is_encrypt
 
         # de-duplicating of events for when we're connected to multiple relays
-        self._duplicates = OrderedDict()
-        self._max_dedup = 1000
+        self._acceptors = [
+            DeduplicateAcceptor(),
+            # bit crap needs the message to be exacly the same, better if it was using matching patterns and with whitelist
+            DuplicateContentAcceptor(),
+            # if content is just numbers then reject, again whitelist would be good
+            NotOnlyNumbersAcceptor()
+        ]
 
         # all the mesages we've seen, if since and event store then may be some from before we started
         self._msg_events = []
@@ -141,14 +146,20 @@ class PostApp:
 
         return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and self._to_users is None)
 
-    def do_event(self, client: Client, sub_id, evt: Event):
-        # we likely to need to do this on all event handlers except those that would be
-        # expected to deal with duplciates themselves e.g. persist
-        if evt.id not in self._duplicates:
-            self._duplicates[evt.id] = True
-            if len(self._duplicates) >= self._max_dedup:
-                self._duplicates.popitem(False)
+    def accept_event(self, event):
+        ret = True
+        for c_accept in self._acceptors:
+            try:
+                ret = c_accept.accept_event(event)
+                if not ret:
+                    break
+            except Exception as e:
+                logging.debug(e)
+        return ret
 
+    def do_event(self, client: Client, sub_id, evt: Event):
+
+        if self.accept_event(evt):
             # unwrap if evt is shared
             if self._public_inbox:
                 if evt.pub_key == self._public_inbox.public_key:

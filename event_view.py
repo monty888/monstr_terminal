@@ -12,7 +12,7 @@ from monstr.ident.profile import Profile, Contact
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
-from monstr.client.event_handlers import PrintEventHandler, EventAccepter, DeduplicateAcceptor, LengthAcceptor
+from monstr.client.event_handlers import PrintEventHandler, EventAccepter, DeduplicateAcceptor, LengthAcceptor, NotOnlyNumbersAcceptor
 from monstr.util import util_funcs
 from monstr.event.event import Event
 from monstr.encrypt import Keys
@@ -356,10 +356,12 @@ async def run_watch(config):
 
         since_url[the_client.url] = datetime.now()
 
-    # prints out the events
+    # prints out the events - NotOnlyNumbersAcceptor to get rid of some spam,
+    # probably if could accept whitelist
     my_printer = PrintEventHandler(profile_handler=profile_handler,
                                    event_acceptors=[DeduplicateAcceptor(),
                                                     LengthAcceptor(),
+                                                    NotOnlyNumbersAcceptor(),
                                                     MyAccept(as_user=as_user,
                                                              view_profiles=view_profiles,
                                                              public_inboxes=inboxes,

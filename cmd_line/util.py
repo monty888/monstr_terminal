@@ -126,6 +126,7 @@ class FormattedEventPrinter:
         await self.print_event_content(evt)
 
     async def _get_profile(self, key) -> Profile:
+        # will error if key is not valid, doesn't break anything for us but maybe we should fix?
         return (await self._profile_handler.get_profiles(pub_ks=key,
                                                          create_missing=True))[0]
 

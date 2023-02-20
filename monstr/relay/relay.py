@@ -370,6 +370,9 @@ class Relay:
         if len(req_json) <= 1:
             raise NostrNoticeException('REQ command missing sub_id')
         sub_id = req_json[1]
+        if not isinstance(sub_id, str):
+            raise NostrNoticeException('sub id should be string, received %s' % type(sub_id))
+
         # if we don't get a filter default to {} rather than error?
         # did this because loquaz doesnt supply so assuming this is permited
         filter = {}
