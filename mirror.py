@@ -13,15 +13,13 @@ async def do_mirror(from_url,
                     to_url,
                     base_filter=None,
                     as_users=None,
-                    for_user=None,
                     since=datetime.now()):
 
     def get_filter():
         ret = base_filter
-        if ret is None:
-            ret = {
-                'since': util_funcs.date_as_ticks(datetime.now())
-            }
+        if as_users:
+            # here we should fetch contacts of as_users and add all returned pubks to authors in filter
+            pass
 
         return ret
 
@@ -69,23 +67,21 @@ if __name__ == "__main__":
     # from_relay = ['ws://localhost:8082/','ws://localhost:8083/']
     from_relay = ['wss://nos.lol']
     to_relay = ['ws://localhost:8081/']
+    # events will be fetch from this time point, default now
+    since = None
+    if since is None:
+        since = util_funcs.date_as_ticks(datetime.now())
 
     # base filter for example to only mirror set kinds
     # {kinds: [Event.KIND..., ]}
-    base_filter = None
+    base_filter = {
+        'since': since
+    }
 
     # if given the kind 3 for this keys will be looked up and
     # the base query will be modified to request from aithors
     # mentioned in the returned contacts, default any
     as_user = None
-
-    # base query will be modified to add this authors, default any
-    # if neither as_user or for_user are given then author wont be set which means
-    # events for everyone will be returned
-    for_user = None
-
-    # events will be fetch from this time point, default now
-    since = None
 
     asyncio.run(do_mirror(from_relay, to_relay,
                           base_filter=base_filter))
