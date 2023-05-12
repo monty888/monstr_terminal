@@ -243,7 +243,7 @@ async def run_watch(config):
         my_client.end()
         sys.exit(2)
 
-    as_user = config['as_user']
+    as_user: Profile = config['as_user']
     view_profiles = config['all_view']
     inboxes = config['inboxes']
     inbox_keys = config['inbox_keys']
@@ -305,7 +305,6 @@ async def run_watch(config):
         def my_sort(evt: Event):
             return evt.created_at_ticks
         events.sort(key=my_sort)
-
         # profile_handler.do_event(the_client,sub_id, events)
 
         # prfetch the profiles that we'll need
@@ -333,26 +332,50 @@ async def run_watch(config):
         if the_client.url in since_url:
             use_since = since_url[the_client.url]
 
-        # metas from now on
-        p_filter = {
-            'kinds': [Event.KIND_META],
-            'since': util_funcs.date_as_ticks(datetime.now())
-        }
-        # events back to since
-        e_filter = {
-            # 'since': event_store.get_newest(the_client.url)+1
-            'since': util_funcs.date_as_ticks(use_since),
-            'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT]
-        }
+        # filter for our main subscription
+        my_filters = [
+            # all metas from this point on
+            {
+                'kinds': [Event.KIND_META],
+                'since': util_funcs.date_as_ticks(datetime.now())
+            }
+        ]
+
+
+        # if as_user restrict to queries that are by are follows or to/mention our follows
+        # TODO: this filter never changes but on seeing a contact event for our asuser we should remake the filter
+        if as_user:
+            # events from accounts we follow
+            my_filters.append({
+                'since': util_funcs.date_as_ticks(use_since),
+                'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
+                'authors': as_user.contacts.follow_keys()
+            })
+            # events to/mention accounts we follow
+            my_filters.append({
+                'since': util_funcs.date_as_ticks(use_since),
+                'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
+                '#p': as_user.contacts.follow_keys()
+            })
+
+        else:
+            # all note and encrypt events
+            my_filters.append({
+                'since': util_funcs.date_as_ticks(use_since),
+                'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT]
+            })
+
+        # if given add until filter to the note/encrypt event filters
         if until:
-            e_filter['until'] = until
+            for c_f in range(1,len(my_filters)):
+                my_filters[c_f]['until'] = until
+
+        # don't think this relay even exists anymore so rem
         # note in the case of wss://rsslay.fiatjaf.com it looks like author is required to receive anything
-        if the_client.url == 'wss://rsslay.fiatjaf.com':
-            e_filter['authors'] = [p.public_key for p in view_profiles]
-        the_client.subscribe(handlers=[profile_handler, my_printer], filters=[
-            p_filter,
-            e_filter
-        ])
+        # if the_client.url == 'wss://rsslay.fiatjaf.com':
+        #    e_filter['authors'] = [p.public_key for p in view_profiles]
+
+        the_client.subscribe(handlers=[profile_handler, my_printer], filters=my_filters)
 
         since_url[the_client.url] = datetime.now()
 
