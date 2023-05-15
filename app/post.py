@@ -97,7 +97,7 @@ class PostApp:
         self._acceptors = [
             DeduplicateAcceptor(),
             # bit crap needs the message to be exacly the same, better if it was using matching patterns and with whitelist
-            DuplicateContentAcceptor(),
+            # DuplicateContentAcceptor(),
             # if content is just numbers then reject, again whitelist would be good
             NotOnlyNumbersAcceptor()
         ]
@@ -158,7 +158,7 @@ class PostApp:
         return ret
 
     def do_event(self, client: Client, sub_id, evt: Event):
-
+        print(evt, evt.content, self.accept_event(evt))
         if self.accept_event(evt):
             # unwrap if evt is shared
             if self._public_inbox:
