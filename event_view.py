@@ -349,13 +349,13 @@ async def run_watch(config):
             my_filters.append({
                 'since': util_funcs.date_as_ticks(use_since),
                 'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                'authors': as_user.contacts.follow_keys()
+                'authors': as_user.contacts.follow_keys()+[as_user.public_key]
             })
             # events to/mention accounts we follow
             my_filters.append({
                 'since': util_funcs.date_as_ticks(use_since),
                 'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                '#p': as_user.contacts.follow_keys()
+                '#p': as_user.contacts.follow_keys()+[as_user.public_key]
             })
 
         else:
