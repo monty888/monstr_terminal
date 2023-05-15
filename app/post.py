@@ -158,7 +158,6 @@ class PostApp:
         return ret
 
     def do_event(self, client: Client, sub_id, evt: Event):
-        print(evt, evt.content, self.accept_event(evt))
         if self.accept_event(evt):
             # unwrap if evt is shared
             if self._public_inbox:
