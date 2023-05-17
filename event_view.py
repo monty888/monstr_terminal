@@ -86,7 +86,9 @@ def get_profiles_from_keys(keys: str,
 
         # is it an alias?
         elif alias_map:
+            print('lookup', c_key)
             p: Profile = alias_map.get_profile(c_key)
+            print(p)
             if p:
                 the_key = p.keys
             else:
@@ -102,7 +104,7 @@ def get_profiles_from_keys(keys: str,
 
 async def get_from_config(config,
                           profile_handler: ProfileEventHandlerInterface):
-    as_user = None
+    as_user:Profile = None
     all_view = []
     view_extra = []
     inboxes = []
@@ -127,9 +129,10 @@ async def get_from_config(config,
             as_user.private_key = user_key.private_key_hex()
 
         if not as_user:
-            raise ConfigError('unable to find/create as_user profile - %s' % config['as_user'])
+            raise ConfigError(f'unable to find/create as_user profile - {config["as_user"]}')
 
         c_c: Contact
+        print(f'looking up contacts for user {as_user.display_name()}...')
         contacts = await profile_handler.load_contacts(as_user)
         if contacts:
             contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
@@ -318,7 +321,7 @@ def get_args() -> dict:
 async def main(args):
 
     # connect to these relay
-    relay = args['relay']
+    relay = args['relay'].split(',')
 
     # start and connect relays
     my_client = ClientPool(relay)
@@ -350,7 +353,7 @@ async def main(args):
     async def print_run_info():
         c_p: Profile
         c_c: Contact
-
+        print(f'using relays {relay}')
         extra_view_profiles = config['view_extra']
         # output running info
         if as_user:
