@@ -320,7 +320,6 @@ class ASQLiteDatabase(ADatabase, ABC):
                 await curs.execute('begin')
                 try:
                     for c_cmd in batch:
-                        print(c_cmd)
                         args = []
                         sql = c_cmd['sql']
                         if 'args' in c_cmd:

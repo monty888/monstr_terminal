@@ -196,11 +196,7 @@ class Client:
 
     async def _my_consumer(self, ws: aiohttp.ClientWebSocketResponse):
         while True:
-            try:
-                self._on_message(await ws.receive_json())
-            except (ValueError, TypeError) as e:
-                logging.debug('Relay::_my_consumer - bad message, %s' % e)
-                await asyncio.sleep(0.1)
+            self._on_message(await ws.receive_json())
         raise ConnectionError('Client::_my_consumer - server has closed the websocket')
 
     def _on_message(self, message):

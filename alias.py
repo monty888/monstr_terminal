@@ -1,13 +1,33 @@
+"""
+usage: alias.py [-h] [-n] [-l] [-f FILENAME] [-k KEYS] profile_name
+
+        link nostr keypairs to profile names
+
+        alias.py <profile_name>           view existing mapping
+        alias.py -n <profile_name>        map new keys auto generated
+        alias.py -n <profile_name> <key>  map new with supplied key if pub_k then view only
+        alias.py -l <profile_name> <key>  map existing to key, any exsting mapping overridden
+
+
+
+positional arguments:
+  profile_name          profile_name to perform action on
+
+options:
+  -h, --help            show this help message and exit
+  -n, --new             create a new profile key pair link
+  -l, --link            link key pair to exiting profile file, any existing mapping will be overridden
+  -f FILENAME, --filename FILENAME
+                        mappings in this file, default is {home}/profiles.csv
+  -k KEYS, --keys KEYS  npub/nsec for the profile
+
+"""
 import logging
 import sys
 import argparse
 from pathlib import Path
-from exception import ConfigException
+from util import ConfigError
 from monstr.ident.alias import ProfileFileAlias
-
-"""
-    command line tool for creating alias to nostr profile key pairs
-"""
 
 
 def profile_creator():
@@ -73,7 +93,7 @@ def profile_creator():
             print(p.keys)
         elif args['link']:
             if keys is None:
-                raise ConfigException('keys required to link')
+                raise ConfigError('keys required to link')
             try:
                 p = my_profiles.link_profile(profile_name=profile_name,
                                              keys=keys)
@@ -81,8 +101,8 @@ def profile_creator():
                 print('linked keys to profile: %s' % profile_name)
                 print(p.keys)
             except Exception as e:
-                raise ConfigException(str(e))
-    except ConfigException as ce:
+                raise ConfigError(str(e))
+    except ConfigError as ce:
         print(ce)
     except Exception as e:
         print(e)

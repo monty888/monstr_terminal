@@ -1,13 +1,36 @@
 """
-    outputs evetns as they're seen from connected relays
+usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA]
+                     [-s SINCE] [-u UNTIL] [-d]
+
+view nostr events from the command line
+
+options:
+  -h, --help            show this help message and exit
+  -r RELAY, --relay RELAY
+                        comma separated nostr relays to connect to, default[wss://nos.lol]
+  -a AS_USER, --as_user AS_USER
+                        alias, priv_k or pub_k of user to view as. If only created from
+                        pub_k then kind 4 encrypted events will be left encrypted,
+                        default[monty]
+  --view_profiles VIEW_PROFILES
+                        additional comma separated alias, priv_k or pub_k of user to view,
+                        default[None]
+  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be
+                        used as public inbox with wrapped events, default[None]
+  -s SINCE, --since SINCE
+                        show events n hours previous to running, default [6]
+  -u UNTIL, --until UNTIL
+                        show events n hours after since, default [None]
+  -d, --debug           enable debug output
+
 """
 import logging
 import sys
 import signal
 import asyncio
+import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
-import getopt
 from monstr.ident.profile import Profile, Contact
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
@@ -18,27 +41,25 @@ from monstr.event.event import Event
 from monstr.encrypt import Keys
 from app.post import PostApp
 from cmd_line.util import FormattedEventPrinter
-from exception import ConfigException
+from util import ConfigError, load_toml
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
-WORK_DIR = '%s/.nostrpy/' % Path.home()
+WORK_DIR = f'{Path.home()}/.nostrpy/'
 # relay/s to attach to
-RELAYS = ['ws://localhost:8081']
-
-def usage():
-    print("""
-usage:
--h, --help                  displays this text
---as_profile                profile_name, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
-                            encrypted events will be left encrypted.
---view_profiles             comma seperated list of profile_name or pub_k that will be included for view
--v, --via                   nsec key to use as encrypted inbox 
---since                     show events n hours previous to running - default 24
---until                     show events n hours after since    
-
-    """)
-    sys.exit(2)
+RELAYS = 'ws://localhost:8081'
+# user to view as
+AS_USER = None
+# additional profiles to view other than as_user and anyone they follow
+VIEW_EXTRA = None
+# look in these 'inboxes' also
+INBOXES = None
+# number of hours to look back at star up
+SINCE = 6
+# get events until - note if using until there's not really any point staying running as new events won't come in!
+UNTIL = None
+# so we can just use a file
+CONFIG_FILE = f'{WORK_DIR}event_view.toml'
 
 
 def get_profiles_from_keys(keys: str,
@@ -69,12 +90,12 @@ def get_profiles_from_keys(keys: str,
             if p:
                 the_key = p.keys
             else:
-                raise ConfigException('%s doesn\'t look like a nsec/npub nostr key or alias not found' % c_key)
+                raise ConfigError('%s doesn\'t look like a nsec/npub nostr key or alias not found' % c_key)
         else:
-            raise ConfigException('%s doesn\'t look like a nsec/npub nostr key' % c_key)
+            raise ConfigError('%s doesn\'t look like a nsec/npub nostr key' % c_key)
 
         if private_only and the_key.private_key_hex() is None:
-            raise ConfigException('%s is not a private key' % c_key)
+            raise ConfigError('%s is not a private key' % c_key)
         ret.append(the_key)
     return ret
 
@@ -106,7 +127,7 @@ async def get_from_config(config,
             as_user.private_key = user_key.private_key_hex()
 
         if not as_user:
-            raise ConfigException('unable to find/create as_user profile - %s' % config['as_user'])
+            raise ConfigError('unable to find/create as_user profile - %s' % config['as_user'])
 
         c_c: Contact
         contacts = await profile_handler.load_contacts(as_user)
@@ -151,7 +172,7 @@ async def get_from_config(config,
     try:
         since = int(config['since'])
     except ValueError as e:
-        raise ConfigException('since - %s not a numeric value' % config['since'])
+        raise ConfigError('since - %s not a numeric value' % config['since'])
 
 
     until = config['until']
@@ -159,7 +180,7 @@ async def get_from_config(config,
         if config['until'] is not None:
             until = int(config['until'])
     except ValueError as e:
-        raise ConfigException('until - %s not a numeric value' % config['until'])
+        raise ConfigError('until - %s not a numeric value' % config['until'])
 
     return {
         'as_user': as_user,
@@ -221,20 +242,95 @@ class MyAccept(EventAccepter):
                    (self._as_user.public_key in evt.pub_key or self._as_user.public_key in evt.p_tags)
 
 
-async def run_watch(config):
-    my_client: Client
-    relay = config['relay']
+def get_cmdline_args(args) -> dict:
+    parser = argparse.ArgumentParser(
+        prog='event_view.py',
+        description="""
+            view nostr events from the command line
+            """
+    )
+    parser.add_argument('-r', '--relay', action='store', default=args['relay'],
+                        help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
+    parser.add_argument('-a', '--as_user', action='store', default=args['as_user'],
+                        help=f"""
+                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
+                        encrypted events will be left encrypted, 
+                        default[{args['as_user']}]""")
+    parser.add_argument('--view_profiles', action='store', default=args['view_extra'],
+                        help=f"""
+                            additional comma separated alias, priv_k or pub_k of user to view,
+                            default[{args['view_extra']}]""")
+    parser.add_argument('-v', '--via', action='store', default=args['via'],
+                        help=f"""
+                            additional comma separated alias(with priv_k) or priv_k that will be used 
+                            as public inbox with wrapped events,
+                            default[{args['via']}]""")
+    parser.add_argument('-s', '--since', action='store', default=args['since'], type=int,
+                        help=f'show events n hours previous to running, default [{args["since"]}]')
+    parser.add_argument('-u', '--until', action='store', default=args['until'], type=int,
+                        help=f'show events n hours after since, default [{args["until"]}]')
 
-    # connection thats just used to query profiles as needed
+    parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
+
+    ret = parser.parse_args()
+
+    # so --as_user opt can be overridden empty if its defined in config file
+    if ret.as_user=='' or ret.as_user.lower() == 'none':
+        ret.as_user = None
+
+    return vars(ret)
+
+
+def get_args() -> dict:
+    """
+    get args to use order is
+        default -> toml_file -> cmd_line options
+
+    so command line option is given priority if given
+
+    :return: {}
+    """
+
+    ret = {
+        'relay': RELAYS,
+        'as_user': AS_USER,
+        'view_extra': VIEW_EXTRA,
+        'via': INBOXES,
+        'since': SINCE,
+        'until': UNTIL,
+        'debug': False
+    }
+
+    # now form config file if any
+    ret.update(load_toml(CONFIG_FILE))
+
+    # now from cmd line
+    ret.update(get_cmdline_args(ret))
+
+    # if debug flagged enable now
+    if ret['debug'] is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug(f'get_args:: running with options - {ret}')
+
+    return ret
+
+
+async def main(args):
+
+    # connect to these relay
+    relay = args['relay']
+
+    # start and connect relays
     my_client = ClientPool(relay)
     asyncio.create_task(my_client.run())
     await my_client.wait_connect(timeout=10)
 
     profile_handler = NetworkedProfileEventHandler(client=my_client)
-    # pop the config
+
+    # fills in config with data from nostr, e.g. follows for any as_user
     try:
-        config = await get_from_config(config, profile_handler)
-    except ConfigException as ce:
+        config = await get_from_config(args, profile_handler)
+    except ConfigError as ce:
         print(ce)
         my_client.end()
         sys.exit(2)
@@ -341,21 +437,35 @@ async def run_watch(config):
             }
         ]
 
+        # bit shit look at this
+        # watch_keys = []
+        # if as_user:
+        #     watch_keys = as_user.contacts.follow_keys() + [as_user.public_key]
+        # if inbox_keys:
+        #     k: Keys
+        #     for k in inbox_keys:
+        #         watch_keys.append(k.public_key_hex())
+        #
+        #     # watch_keys = watch_keys + inbox_keys
+        watch_keys = []
+        if view_profiles:
+            c_p: Profile
+            for c_p in view_profiles:
+                watch_keys.append(c_p.public_key)
 
-        # if as_user restrict to queries that are by are follows or to/mention our follows
-        # TODO: this filter never changes but on seeing a contact event for our asuser we should remake the filter
-        if as_user:
+        # watch both from and mention for these keys
+        if watch_keys:
             # events from accounts we follow
             my_filters.append({
                 'since': util_funcs.date_as_ticks(use_since),
                 'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                'authors': as_user.contacts.follow_keys()+[as_user.public_key]
+                'authors': watch_keys
             })
             # events to/mention accounts we follow
             my_filters.append({
                 'since': util_funcs.date_as_ticks(use_since),
                 'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                '#p': as_user.contacts.follow_keys()+[as_user.public_key]
+                '#p': watch_keys
             })
 
         else:
@@ -414,54 +524,6 @@ async def run_watch(config):
 
 
 
-    # profile_client.end()
-
-
-async def run_event_view():
-    config = {
-        'as_user': None,
-        'view_profiles': None,
-        'via': None,
-        'since': 6,
-        'until': None,
-        'relay': RELAYS
-    }
-
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hr:v:d', ['help',
-                                                            'as_profile=',
-                                                            'view_profiles=',
-                                                            'via=',
-                                                            'since=',
-                                                            'until=',
-                                                            'relay=',
-                                                            'debug'])
-
-        # attempt interpret action
-        for o, a in opts:
-            if o in ('-h', '--help'):
-                usage()
-            if o == '--as_profile':
-                config['as_user'] = a
-            if o == '--view_profiles':
-                config['view_profiles'] = a
-            if o in ('-v', '--via'):
-                config['via'] = a
-            if o == '--since':
-                config['since'] = a
-            if o == '--until':
-                config['until'] = a
-            if o in ('-r', '--relay'):
-                config['relay'] = a.split(',')
-            if o in ('-d', '--debug'):
-                logging.getLogger().setLevel(logging.DEBUG)
-
-        await run_watch(config)
-
-    except getopt.GetoptError as e:
-        print(e)
-        usage()
-
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.ERROR)
@@ -470,4 +532,4 @@ if __name__ == "__main__":
         sys.exit(0)
 
     signal.signal(signal.SIGINT, sigint_handler)
-    asyncio.run(run_event_view())
+    asyncio.run(main(get_args()))

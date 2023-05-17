@@ -1,28 +1,55 @@
 """
-    run relay from the command line
-    takes cmd line args or optionally config from TOML file at ~/.nostr/relay.toml
-    (unless user gives another dir for file)
+usage: run_relay.py [-h] [--host HOST] [--port PORT] [--endpoint ENDPOINT]
+                    [-s {sqlite,postgres,transient,none}] [--dbfile DBFILE]
+                    [--pg_database PG_DATABASE] [--pg_user PG_USER]
+                    [--pg_password PG_PASSWORD] [--maxsub MAXSUB]
+                    [--maxlength MAXLENGTH] [--nip15] [--nip16] [--nip20] [-w] [-d]
 
-    The relay should be good for testing and also would be OK for adhoc/small groups
-    probably it can be improved and performance/hardend a lot more.
-    Likely it's slighty behind on NIP support - for example doesn't yet support delegation
-    The default maxsub of 3 is probably to low now.
-    Should be easy add addtional EventAccepters e.g. to allow only events from named pubkeys
+runs a nostr relay
 
+options:
+  -h, --help            show this help message and exit
+  --host HOST           ip address where relay will listen, default[localhost]
+  --port PORT           port relay will listen, default[8081]
+  --endpoint ENDPOINT   endpoint address for the relay websocket[/]
+  -s {sqlite,postgres,transient,none}, --store {sqlite,postgres,transient,none}
+                        storage type to use for received events, default[sqlite]
+  --dbfile DBFILE       when store is sqlite the file location for the db,
+                        default[/{home}}/.nostrpy/nostr-relay.db]
+  --pg_database PG_DATABASE
+                        when store is postgres the postgres db name, default[nostr-
+                        relay]
+  --pg_user PG_USER     when store is postgres the postgres username,
+                        default[postgres]
+  --pg_password PG_PASSWORD
+                        when store is postgres the postgres password
+  --maxsub MAXSUB       maximum open subs allowed per client websocket, default[10]
+  --maxlength MAXLENGTH
+                        maximum length for event content if any, default[None]
+  --nip15               disable NIP15 - End Of Stored Events(EOSE) see
+                        https://github.com/nostr-protocol/nips/blob/master/15.md,
+                        default[False]
+  --nip16               disable NIP16 - Event treatment, ephemeral and replaceable
+                        event ranges see https://github.com/nostr-
+                        protocol/nips/blob/master/16.md, default[False]
+  --nip20               disable NIP20 - OK command events see
+                        https://github.com/nostr-protocol/nips/blob/master/20.md,
+                        default[False]
+  -w, --wipe            wipes event store and exits
+  -d, --debug           enable debug output
 """
-import asyncio
 import logging
-import getopt
 import sys
 import os
+import asyncio
 import signal
+import argparse
 from pathlib import Path
-import toml
-from toml import TomlDecodeError
-
 from monstr.relay.relay import Relay
 from monstr.relay.accept_handlers import LengthAcceptReqHandler
 from monstr.event.persist import RelayMemoryEventStore, ARelaySQLiteEventStore, RelayPostgresEventStore
+from util import load_toml
+
 # default values when nothing is specified either from cmd line or config file
 HOST = 'localhost'
 PORT = 8081
@@ -30,44 +57,19 @@ END_POINT = '/'
 DEBUG_LEVEL = logging.DEBUG
 DB_TYPE = 'sqlite'
 # make this default home, wouldn't work on windows
-WORK_DIR = '/home/%s/.nostrpy/' % Path.home().name
-CONFIG_FILE = WORK_DIR + 'config.toml'
-SQL_LITE_FILE = '%snostr-relay.db' % WORK_DIR
+WORK_DIR = f'{Path.home()}/.nostrpy/'
+CONFIG_FILE = WORK_DIR + 'relay.toml'
+SQL_LITE_FILE = f'{WORK_DIR}nostr-relay.db'
 PG_USER = 'postgres'
 PG_PASSWORD = 'password'
-PG_DATBASE = 'nostr-relay'
+PG_DATABASE = 'nostr-relay'
 MAX_SUB = 10
 MAX_CONTENT_LENGTH = None
 
-def usage():
-    print("""
-usage: python run_relay.py --host=localhost --port=8081
-
--h --help   -   show this message
--w --wipe   -   delete all data from db and exit
---config    -   config file if any
---host      -   host relay will listen websocket at, default %s
---port      -   port relay will listen websocket on, default %s
---endpoint  -   endpoint relay will listen websocket on, default %s
--s --store  -   storage type where relay will persist events etc. either sqlite, postgres, transient or none, default %s
---dbfile    -   when --store is sqlite the db file for the database, default:
-                %s
-                when using dir .nostrpy dir it will be created if it doesn't exist already - other dirs wont and
-                should be created manually. The dbfile will be created if it doesn't already exist.
---maxsub    -   maximum open subs allowed per client websocket, default %s
---maxlength -   maximum length for event content if any
---nip15     -   disable NIP15 - End Of Stored Events(EOSE)
-                see https://github.com/nostr-protocol/nips/blob/master/15.md 
---nip16     -   disable NIP16 - Event treatment, ephemeral and replaceable event ranges
-                see https://github.com/nostr-protocol/nips/blob/master/16.md
---nip20     -   disable NIP20 - OK command events  
-                see https://github.com/nostr-protocol/nips/blob/master/20.md
-  
-    """ % (HOST, PORT, END_POINT, DB_TYPE, SQL_LITE_FILE, MAX_SUB))
 
 def create_work_dir():
     if not os.path.isdir(WORK_DIR):
-        logging.info('create_work_dir:: attempting to create %s' % WORK_DIR)
+        logging.info(f'create_work_dir:: attempting to create {WORK_DIR}')
         os.makedirs(WORK_DIR)
 
 
@@ -80,7 +82,7 @@ async def get_sql_store(filename, is_nip16):
     if parent_dir != '.nostrpy':
         my_dir = Path(os.path.sep.join(f.parts[:-1]).replace(os.path.sep+os.path.sep, os.path.sep))
         if not my_dir.is_dir():
-            print('sqllite dir not found %s' % my_dir)
+            print(f'sqllite dir not found {my_dir}')
             sys.exit(2)
 
     # if the file doesn't exist it'll be created and we'll create the db struct too
@@ -89,10 +91,10 @@ async def get_sql_store(filename, is_nip16):
     ret = ARelaySQLiteEventStore(filename,
                                  is_nip16=is_nip16)
     if not ret.exists():
-        logging.info('get_sql_store::create new db %s' % filename)
+        logging.info(f'get_sql_store::create new db {filename}')
         await ret.create()
     else:
-        logging.info('get_sql_store::open existing db %s' % filename)
+        logging.info(f'get_sql_store::open existing db {filename}')
 
     return ret
 
@@ -108,163 +110,191 @@ def get_postgres_store(db_name, user, password, is_nip16):
     return ret
 
 
-def load_toml(filename):
-    ret = {}
-    f = Path(filename)
-    if f.is_file():
-        try:
-            ret = toml.load(filename)
-        except TomlDecodeError as te:
-            print('Error in config file %s - %s ' % (filename, te))
-            sys.exit(2)
+def get_cmdline_args(args) -> dict:
+    parser = argparse.ArgumentParser(
+        prog='run_relay.py',
+        description="""
+            runs a nostr relay
+            """
+    )
+    parser.add_argument('--host', action='store', default=args['host'],
+                        help=f'ip address where relay will listen, default[{args["host"]}]')
+    parser.add_argument('--port', action='store', default=args['port'], type=int,
+                        help=f'port relay will listen, default[{args["port"]}]')
+    parser.add_argument('--endpoint', action='store', default=args['endpoint'],
+                        help=f'endpoint address for the relay websocket[{args["endpoint"]}]')
+    parser.add_argument('-s', '--store', action='store', default=args['store'],
+                        choices=['sqlite', 'postgres', 'transient', 'none'],
+                        help=f'storage type to use for received events, default[{args["store"]}]')
 
-    else:
-        logging.debug('load_toml:: no config file %s' % filename)
-    return ret
+    # sqlite store stuff
+    parser.add_argument('--dbfile', action='store', default=args['dbfile'],
+                        help=f'when store is sqlite the file location for the db, default[{args["dbfile"]}]')
+    # postgres store stuff
+    parser.add_argument('--pg_database', action='store', default=args['pg_database'],
+                        help=f'when store is postgres the postgres db name, default[{args["pg_database"]}]')
+    parser.add_argument('--pg_user', action='store', default=args['pg_user'],
+                        help=f'when store is postgres the postgres username, default[{args["pg_user"]}]')
+    parser.add_argument('--pg_password', action='store', default=args['pg_password'],
+                        help=f'when store is postgres the postgres password')
+    # general relay operation
+
+    parser.add_argument('--maxsub', action='store', default=args['maxsub'], type=int,
+                        help=f'maximum open subs allowed per client websocket, default[{args["maxsub"]}]')
+    parser.add_argument('--maxlength', action='store', default=args['maxlength'], type=int,
+                        help=f'maximum length for event content if any, default[{args["maxlength"]}]')
+    # nip support flags as flag is to turn off they're output not'ed
+    parser.add_argument('--nip15', action='store_true',
+                        help=f"""disable NIP15 - End Of Stored Events(EOSE)
+                see https://github.com/nostr-protocol/nips/blob/master/15.md, default[{not args["nip15"]}]""",
+                        default=args['nip15'])
+    parser.add_argument('--nip16', action='store_true',
+                        help=f"""disable NIP16 - Event treatment, ephemeral and replaceable event ranges
+                see https://github.com/nostr-protocol/nips/blob/master/16.md, default[{not args["nip16"]}]""",
+                        default=args['nip16'])
+    parser.add_argument('--nip20', action='store_true',
+                        help=f"""disable NIP20 - OK command events  
+                see https://github.com/nostr-protocol/nips/blob/master/20.md, default[{not args["nip20"]}]""",
+                        default=args['nip20'])
+
+    parser.add_argument('-w', '--wipe', action='store_true', help='wipes event store and exits', default=args['debug'])
+    parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
+
+    ret = parser.parse_args()
+
+    return vars(ret)
 
 
-async def main():
-    is_wipe = False
-    create_work_dir()
+def get_args() -> dict:
+    """
+    get args to use order is
+        default -> toml_file -> cmd_line options
 
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hs:we', ['help',
-                                                           'host=',
-                                                           'port=',
-                                                           'endpoint=',
-                                                           'config=',
-                                                           'store=',
-                                                           'dbfile=',
-                                                           'maxsub=',
-                                                           'maxlength=',
-                                                           'wipe',
-                                                           'nip15',
-                                                           'nip16',
-                                                           'nip20'])
-    except getopt.GetoptError as e:
-        print(e)
-        usage()
-        sys.exit(2)
+    so command line option is given priority if given
 
-    # get config file if any and debug, also we should get debug level here if any
-    config_file = CONFIG_FILE
-    for o,a in opts:
-        if o == '--config':
-            config_file = a
+    :return: {}
+    """
 
-    # set logging level
-    logging.getLogger().setLevel(logging.DEBUG)
-
-
-    # default config
-    use_max_length = MAX_CONTENT_LENGTH
-    config = {
+    # set up the defaults if not overriden
+    # add config option so we can have different files and also make workdir conf?
+    ret = {
         'host': HOST,
         'port': PORT,
         'endpoint': END_POINT,
         'store': DB_TYPE,
         'dbfile': SQL_LITE_FILE,
-        'maxsub': MAX_SUB,
-        'maxlength': MAX_CONTENT_LENGTH,
-        'pg_database': PG_DATBASE,
+        'pg_database': PG_DATABASE,
         'pg_user': PG_USER,
         'pg_password': PG_PASSWORD,
+        'maxsub': MAX_SUB,
+        'maxlength': MAX_CONTENT_LENGTH,
         'nip15': True,
         'nip16': True,
-        'nip20': True
+        'nip20': True,
+        'debug': False
     }
-    config.update(load_toml(config_file))
 
-    # do the rest of the passed in options, if defined will override defaults or from config file
-    for o, a in opts:
-        if o in ('-h', '--help'):
-            usage()
-            sys.exit(0)
-        elif o in ('-w','--wipe'):
-            is_wipe = True
-        elif o == '--host':
-            config['host'] = a
-        elif o == '--port':
-            config['port'] = a
-        elif o == '--endpoint':
-            config['endpoint'] = a
-            if config['endpoint'][0]!='/':
-                config['endpoint'] = '/'+config['endpoint']
-        elif o in ('-s', '--store'):
-            config['store'] = a
-        elif o == '--dbfile':
-            config['dbfile'] = a
-        elif o == '--maxsub':
-            config['maxsub'] = a
-        elif o == '--maxlength':
-            config['maxlength'] = a
-        elif o in ('--nip15'):
-            config['nip15'] = False
-        elif o in ('--nip16'):
-            config['nip16'] = False
-        elif o in ('--nip20'):
-            config['nip20'] = False
+    # now form config file if any
+    ret.update(load_toml(CONFIG_FILE))
 
-    # make sure items that need to be ints are
-    for num_field in ('port', 'maxsub', 'maxlength'):
-        try:
-            if not config[num_field] is None:
-                config[num_field] = int(config[num_field])
-        except ValueError as e:
-            print('--%s must be numeric' % num_field)
-            sys.exit(2)
+    # now from cmd line
+    ret.update(get_cmdline_args(ret))
 
-    # remove any items that don't apply, there not a problem but might confuse debug
-    if config['store'] !='sqlite':
-        del config['dbfile']
-    if config['store'] !='postgres':
-        del config['pg_database']
-        del config['pg_user']
-        del config['pg_password']
+    # if debug flagged enable now
+    if ret['debug'] is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # remove any config not required because of storage choice
+    if ret['store'] != 'sqlite':
+        del ret['dbfile']
+    if ret['store'] != 'postgres':
+        del ret['pg_database']
+        del ret['pg_user']
+        del ret['pg_password']
+
+    # don't out the password
+    ret_out = ret
+    if 'pg_password' in ret:
+        ret_out['pg_password'] = '****'
+
+    if ret['debug']:
+        logging.debug(f'get_args:: running with options - {ret}')
+
+    return ret
+
+
+async def main(args):
+    is_wipe = args['wipe']
+    create_work_dir()
+
+    # relay addressing
+    host = args['host']
+    port = args['port']
+    end_point = args['endpoint']
+
+    # sub options
+    max_sub = args['maxsub']
+    max_length = args['maxlength']
+
+    # get nip flags
+    nip15 = args['nip15']
+    nip16 = args['nip16']
+    nip20 = args['nip20']
+
+    # get the store type we're using and create
+    store = args['store']
+    my_store = None
 
     # create storage object which is either to sqllite, posgres or transient
-    if config['store'] == 'sqlite':
-        my_store = await get_sql_store(filename=config['dbfile'],
-                                       is_nip16=config['nip16'])
-    elif config['store'] == 'postgres':
-        my_store = get_postgres_store(db_name=config['pg_database'],
-                                      user=config['pg_user'],
-                                      password=config['pg_password'],
-                                      is_nip16=config['nip16'])
+    if store == 'sqlite':
+        my_store = await get_sql_store(filename=args['dbfile'],
+                                       is_nip16=nip16)
+    elif store == 'postgres':
+        my_store = get_postgres_store(db_name=args['pg_database'],
+                                      user=args['pg_user'],
+                                      password=args['pg_password'],
+                                      is_nip16=nip16)
         # blank the password from printout
-        config['pg_password'] = '***'
+        args['pg_password'] = '***'
 
-    elif config['store'] == 'transient':
-        my_store = RelayMemoryEventStore(is_nip16=config['nip16'])
-    elif config['store'] == 'none':
-        my_store = None
-    else:
-        print('--store most be sqlite, postgres, transient or None')
-        sys.exit(2)
+    elif store == 'transient':
+        my_store = RelayMemoryEventStore(is_nip16=nip16)
 
+    # just running to empty db
     if is_wipe:
-        if config['store'] not in ('transient', 'none'):
+        if store not in ('transient', 'none'):
             my_store.destroy()
         else:
-            print('%s store, no action required!' % config['store'])
+            print(f'{store} store, no action required!')
         sys.exit(0)
 
     # optional message accept handlers
     accept_handlers = []
-    if config['maxlength']:
-        accept_handlers.append(LengthAcceptReqHandler(max=config['maxlength']))
+    if max_length:
+        accept_handlers.append(LengthAcceptReqHandler(max=max_length))
 
     for c_handler in accept_handlers:
         logging.info(c_handler)
 
-    logging.debug('config = %s' % config)
-    my_relay = Relay(my_store,
-                     max_sub=config['maxsub'],
-                     accept_req_handler=accept_handlers,
-                     enable_nip15=config['nip15'],
-                     ack_events=config['nip20'])
+    logging.debug(f'config = {args}')
 
-    await my_relay.start(config['host'], config['port'], config['endpoint'])
+    my_relay = Relay(my_store,
+                     max_sub=max_sub,
+                     accept_req_handler=accept_handlers,
+                     enable_nip15=nip15,
+                     ack_events=nip20)
+
+    print(f'running relay at {host}:{port}{end_point} persiting events to store {store}')
+    await my_relay.start(host=host,
+                         port=port,
+                         end_point=end_point)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    logging.getLogger().setLevel(logging.ERROR)
+
+    def sigint_handler(signal, frame):
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, sigint_handler)
+    asyncio.run(main(get_args()))
+

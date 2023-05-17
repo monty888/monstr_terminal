@@ -1,11 +1,37 @@
 """
-    make notes from the command line see --help for more options
+    usage: poster.py [-h] [-r RELAY] [-a AS_USER] [-t TO_USERS] [-v VIA] [-s SUBJECT] [-p]
+                 [-i] [-l] [-d]
+                 [message ...]
+
+post nostr text(1) and encrypted text(4) events from the command line
+
+positional arguments:
+  message               an integer for the accumulator
+
+options:
+  -h, --help            show this help message and exit
+  -r RELAY, --relay RELAY
+                        comma separated nostr relays to connect to,
+                        default[ws://localhost:8081]
+  -a AS_USER, --as_user AS_USER
+                        alias, priv_k of user to post as, default[monty]
+  -t TO_USERS, --to_users TO_USERS
+                        comma seperated alias, priv_k, or pub_k of user to post to,
+                        default[None]
+  -v VIA, --via VIA     alias(with priv_k) or nsec that will be used as public inbox
+                        with wrapped events, default[None]
+  -s SUBJECT, --subject SUBJECT
+                        add subject tag to post,, default[None]
+  -p, --plain_text      post as plain text
+  -i, --ignore_missing  don't fail on missing to_users
+  -l, --loop            stay open to enter and receive messages
+  -d, --debug           enable debug output
+
 """
 import logging
 import asyncio
-import sys
 from pathlib import Path
-import getopt
+import argparse
 from monstr.ident.profile import Profile
 from monstr.ident.event_handlers import NetworkedProfileEventHandler
 from monstr.ident.alias import ProfileFileAlias
@@ -15,23 +41,21 @@ from app.post import PostApp
 from cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
 from monstr.util import util_funcs
-from exception import ConfigException
+from util import ConfigError, load_toml
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
-WORK_DIR = '%s/.nostrpy/' % Path.home()
+WORK_DIR = f'{Path.home()}/.nostrpy/'
 # relay/s to attach to
-RELAYS = ['ws://localhost:8081']
-
-def usage():
-    print("""
-        TODO!!!
-    """)
-    sys.exit(2)
+RELAYS = 'ws://localhost:8081'
+# lookup profiles here
+ALIAS_FILE = f'{WORK_DIR}profiles.csv'
+# config from toml file
+CONFIG_FILE = f'{WORK_DIR}poster.toml'
 
 
 def show_post_info(as_user: Profile,
-                   msg:str,
+                   msg: str,
                    to_users: [Profile],
                    is_encrypt: bool,
                    subject: str,
@@ -59,69 +83,6 @@ def show_post_info(as_user: Profile,
                           ''.join(['-'] * 10)))
 
 
-def get_options():
-    ret = {
-        'relay': RELAYS,
-        'is_encrypt': True,
-        'ignore_missing': False,
-        'user': None,
-        'to_users': None,
-        'inbox': None,
-        'subject': None,
-        'loop': False,
-        'message': None,
-        'alias_file': '%sprofiles.csv' % WORK_DIR
-    }
-
-    try:
-        # change to use argparse?
-        opts, args = getopt.getopt(sys.argv[1:], 'hda:t:piles:r:e:v:', ['help',
-                                                                        'debug',
-                                                                        'relay=',
-                                                                        'as_profile=',
-                                                                        'plain_text',
-                                                                        'to=',
-                                                                        'via=',
-                                                                        'ignore_missing',
-                                                                        'loop',
-                                                                        'subject=',
-                                                                        'event='])
-
-        # attempt interpret action
-        for o, a in opts:
-            if o in ('-h', '--help'):
-                usage()
-            elif o in ('-d', '--debug'):
-                logging.getLogger().setLevel(logging.DEBUG)
-            elif o in ('-i', '--ignore_missing'):
-                ret['ignore_missing'] = True
-            elif o in ('-a', '--as_profile'):
-                ret['user'] = a
-            elif o in ('-t', '--to'):
-                ret['to_users'] = a.split(',')
-            elif o in ('-r', '--relay'):
-                ret['relay'] = a.split(',')
-            elif o in ('-p', '--plain_text'):
-                ret['is_encrypt'] = False
-            elif o in ('-s', '--subject'):
-                ret['subject'] = a
-            elif o in ('-v', '--via'):
-                ret['inbox'] = a
-            elif o in ('-l', '--loop'):
-                ret['loop'] = True
-
-        if ret['user'] is None and len(args) > 1:
-            ret['user'] = args.pop(0)
-        if args:
-            ret['message'] = ' '.join(args)
-
-    except getopt.GetoptError as e:
-        print(e)
-        usage()
-
-    return ret
-
-
 def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) -> Keys:
     try:
         ret = Keys.get_key(key_val)
@@ -134,19 +95,17 @@ def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) 
             raise Exception()
 
     except Exception as e:
-        raise ConfigException('unable to create %s keys using - %s' % (for_desc,
-                                                                       key_val))
+        raise ConfigError(f'unable to create {for_desc} keys using - {key_val}')
 
     if ret.private_key_hex() is None:
-        raise ConfigException('unable to create %s private keys using - %s' % (for_desc,
-                                                                               key_val))
+        raise ConfigError(f'unable to create {for_desc} private keys using - {key_val}')
     return ret
 
 
 def get_user_keys(user: str, alias_map: ProfileFileAlias = None) -> Keys:
 
     if user is None:
-        raise ConfigException('no user supplied')
+        raise ConfigError('no user supplied')
     elif user == '?':
         ret = Keys()
         print('created adhoc key - %s/%s' % (ret.public_key_hex(),
@@ -175,18 +134,12 @@ def get_to_keys(to_users: [str], ignore_missing: bool, alias_map: ProfileFileAli
                 if ignore_missing:
                     logging.info('unable to create keys for to_user using - %s - ignoring' % c_to)
                 else:
-                    raise ConfigException('unable to create keys for to_user using - %s' % c_to)
+                    raise ConfigError('unable to create keys for to_user using - %s' % c_to)
 
         if not ret:
-            raise ConfigException('unable to create any to user keys!')
+            raise ConfigError('unable to create any to user keys!')
 
     return ret
-
-
-def get_inbox_keys(inbox: str) -> Keys:
-    if inbox is None:
-        return
-    return create_key(inbox, 'user')
 
 
 def create_post_event(user: Keys,
@@ -388,59 +341,164 @@ async def post_loop(relays: [str],
         await my_gui.run()
 
 
-async def run_post():
-    opts = get_options()
-    user = opts['user']
-    to_users = opts['to_users']
-    inbox = opts['inbox']
-    ignore_missing = opts['ignore_missing']
-    loop = opts['loop']
-    message = opts['message']
-    is_encrypt = opts['is_encrypt']
-    alias_file = opts['alias_file']
+def get_cmdline_args(args) -> dict:
+    parser = argparse.ArgumentParser(
+        prog='poster.py',
+        description="""
+            post nostr text(1) and encrypted text(4) events from the command line
+            """
+    )
+    parser.add_argument('-r', '--relay', action='store', default=args['relay'],
+                        help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
+    parser.add_argument('-a', '--as_user', action='store', default=args['as_user'],
+                        help=f"""
+                        alias, priv_k of user to post as,
+                        default[{args['as_user']}]""")
+    parser.add_argument('-t', '--to_users', action='store', default=args['to_users'],
+                        help=f"""
+                        comma seperated alias, priv_k, or pub_k of user to post to,
+                        default[{args['to_users']}]""")
+    parser.add_argument('-v', '--via', action='store', default=args['via'],
+                        help=f"""
+                            alias(with priv_k) or nsec that will be used as public inbox with wrapped events,
+                            default[{args['via']}]""")
+    parser.add_argument('-s', '--subject', action='store', default=args['subject'],
+                        help=f"""
+                                add subject tag to post,,
+                                default[{args['subject']}]""")
+
+    parser.add_argument('message', type=str, nargs='*',
+                       help='an integer for the accumulator')
+    parser.add_argument('-p', '--plain_text', action='store_false', help='post as plain text',
+                        dest='encrypt')
+
+    parser.add_argument('-i', '--ignore_missing', action='store_true', help='don\'t fail on missing to_users')
+    parser.add_argument('-l', '--loop', action='store_true', help='stay open to enter and receive messages')
+    parser.add_argument('-d', '--debug', action='store_true', help='enable debug output')
+
+    ret = parser.parse_args()
+
+    return vars(ret)
+
+
+def get_args() -> dict:
+    """
+    get args to use order is
+        default -> toml_file -> cmd_line options
+
+    so command line option is given priority if given
+
+    :return: {}
+    """
+
+    ret = {
+        'relay': RELAYS,
+        'as_user': None,
+        'to_users': None,
+        'via': None,
+        'encrypt': True,
+        'ignore_missing': False,
+        'subject': None,
+        'message': None,
+        'loop': False,
+        'alias_file': ALIAS_FILE,
+        'debug': False
+    }
+
+    # now form config file if any
+    ret.update(load_toml(CONFIG_FILE))
+
+    # now from cmd line
+    ret.update(get_cmdline_args(ret))
+
+    # if debug flagged enable now
+    if ret['debug'] is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug(f'get_args:: running with options - {ret}')
+
+    return ret
+
+
+async def main(args):
+    # post to these relays
+    relays = args['relay'].split(',')
+
+    # we'll post as this user
+    user = args['as_user']
+
+    # post to these users
+    to_users = args['to_users']
+    if to_users:
+        to_users = to_users.split(',')
+
+    # msgs wrapped via this in box (priv key that we know and so should those we post to)
+    inbox = args['via']
+
+    # don't fail just because we can't find all to_users
+    ignore_missing = args['ignore_missing']
+
+    # open gui so we can type mutiple messages, in this case message text isn't required
+    loop = args['loop']
+
+    # message text to be sent if not loop mode
+    message = ' '.join(args['message'])
+
+    # subject text for message/ each message
+    subject = args['subject']
+
+    # encryped kind 4 events
+    is_encrypt = args['encrypt']
+
+    # file used to lookup aliases
+    alias_file = args['alias_file']
 
     # human alias to keys
     key_alias = ProfileFileAlias(alias_file)
 
     try:
-        if loop is False and message is None:
-            raise ConfigException('no message supplied to post')
+        if loop is False and not message:
+            raise ConfigError('no message supplied to post')
 
         user_keys = get_user_keys(user,
                                   alias_map=key_alias)
 
         if is_encrypt and to_users is None:
-            raise ConfigException('to users is required for encrypted messages')
+            raise ConfigError('to users is required for encrypted messages')
 
         to_keys = get_to_keys(to_users, ignore_missing,
                               alias_map=key_alias)
 
-        inbox_keys = get_inbox_keys(inbox)
+        inbox_keys = None
+        if inbox:
+            inbox_keys = get_user_keys(inbox, alias_map=key_alias)
 
-        if opts['loop'] is False:
-            await post_single(relays=opts['relay'],
+        if loop is False:
+            await post_single(relays=relays,
                               user_k=user_keys,
                               to_users_k=to_keys,
                               inbox_k=inbox_keys,
-                              is_encrypt=opts['is_encrypt'],
-                              subject=opts['subject'],
-                              message=opts['message']
+                              is_encrypt=is_encrypt,
+                              subject=subject,
+                              message=message
                               )
         else:
-            await post_loop(relays=opts['relay'],
+            await post_loop(relays=relays,
                             user_k=user_keys,
                             to_users_k=to_keys,
                             inbox_k=inbox_keys,
-                            is_encrypt=opts['is_encrypt'],
-                            subject=opts['subject']
+                            is_encrypt=is_encrypt,
+                            subject=subject
                             )
 
-    except ConfigException as ce:
+    except ConfigError as ce:
         print(ce)
 
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.FATAL)
     util_funcs.create_work_dir(WORK_DIR)
-    asyncio.run(run_post())
+    asyncio.run(main(get_args()))
+    # print(get_args())
+
+
 
