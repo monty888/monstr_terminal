@@ -226,5 +226,6 @@ type 'exit' to quit
 
 also follow commands are available:
 * $count - returns count of profiles in cache 
-* $profile {nsec/npub} [short|long|json]- returns profile meta data
-* $contacts {nsec/npub} [short|long|json] - returns profile meta for contacts of given key
+* $profile {nsec/npub} [short|long|json]- show profile meta data
+* $contacts {nsec/npub} [short|long|json] - show profile meta for contacts of given key
+* $posts {nsec/npup} - show last 10 post for profile
