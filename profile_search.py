@@ -393,7 +393,13 @@ async def do_search():
             search_filter = {}
             if msg:
                 search_filter['name'] = msg
-                search_filter['public_key'] = msg
+                if msg.startswith('npub') or msg.startswith('nsec'):
+                    try:
+                        search_filter['public_key'] = Keys.get_key(msg).public_key_hex()
+                    except Exception as e:
+                        logging.debug(f'bad pr partial key {msg}?')
+                else:
+                    search_filter['public_key'] = msg
                 search_filter['about'] = msg
 
             matches = profile_store.select_profiles(search_filter)
