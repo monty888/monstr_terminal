@@ -220,7 +220,7 @@ start running with as alias monty attach to relay nos.lol
 python profile_search.py --as=monty --relay=wss://nos.lol       
 ```
 
-on runninga the > prompt type text to preform a search of seen profiles.
+on running at the > prompt type text to preform a search of seen profiles.
   
 type 'exit' to quit
 
