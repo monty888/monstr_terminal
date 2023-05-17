@@ -52,7 +52,7 @@ on the used relays. When a user is given encrypted text will automatically be de
 
 
 # poster
-post text(kind 1) or encrypted(kind 4) text notes to nostr. Optionally via a inbox 
+post text(kind 1) or encrypted(kind 4) text notes to nostr from the command line. Optionally via a inbox 
 an account for which bother poster and receiver have priv key so that meta is hidden.
 
 ```commandline
