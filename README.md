@@ -215,13 +215,13 @@ options:
 
 ### examples
 
-run as alias monty attach to relay nos.lol
+start running with as alias monty attach to relay nos.lol
 ```shell
 python profile_search.py --as=monty --relay=wss://nos.lol       
 ```
 
-one running type any text to return profiles that have been seen that match
-on name field, about field or keys.  
+on runninga the > prompt type text to preform a search of seen profiles.
+  
 type 'exit' to quit
 
 also follow commands are available:
