@@ -189,3 +189,42 @@ wipe the default (sqlite) db
 ```
 python run_relay.py --w
 ```
+
+# profile search
+
+builds up a local list of profiles for searching from the command line
+
+```commandline
+usage: profile_search.py [-h] [-r RELAY] [-a AS_USER] [-b BOOTSTRAP] [-s SINCE] [-d]
+
+search for nostr user profiles
+
+options:
+  -h, --help            show this help message and exit
+  -r RELAY, --relay RELAY
+                        comma separated urls of relays to connect to - default ws://localhost:8081
+  -a AS_USER, --as_user AS_USER
+                        nsec/npub/hex or alias for account viewing as - default None
+  -b BOOTSTRAP, --bootstrap BOOTSTRAP
+                        nsec/npub/hex or alias for accounts used for bootstrapping - default None
+  -s SINCE, --since SINCE
+                        n days to search back for profile events - default 5
+  -d, --debug           enable debug output
+
+```
+
+### examples
+
+run as alias monty attach to relay nos.lol
+```shell
+python profile_search.py --as=monty --relay=wss://nos.lol       
+```
+
+one running type any text to return profiles that have been seen that match
+on name field, about field or keys.  
+type 'exit' to quit
+
+also follow commands are available:
+* $count - returns count of profiles in cache 
+* $profile {nsec/npub} [short|long|json]- returns profile meta data
+* $contacts {nsec/npub} [short|long|json] - returns profile meta for contacts of given key

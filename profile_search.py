@@ -1,3 +1,22 @@
+"""
+usage: profile_search.py [-h] [-r RELAY] [-a AS_USER] [-b BOOTSTRAP] [-s SINCE] [-d]
+
+search for nostr user profiles
+
+options:
+  -h, --help            show this help message and exit
+  -r RELAY, --relay RELAY
+                        comma separated urls of relays to connect to - default ws://localhost:8081
+  -a AS_USER, --as AS_USER
+                        nsec/npub/hex or alias for account viewing as - default None
+  -b BOOTSTRAP, --bootstrap BOOTSTRAP
+                        nsec/npub/hex or alias for accounts used for bootstrapping - default None
+  -s SINCE, --since SINCE
+                        n days to search back for profile events - default 5
+  -d, --debug           enable debug output
+
+
+"""
 import logging
 import asyncio
 import sys
@@ -37,7 +56,7 @@ def get_args():
     )
     parser.add_argument('-r', '--relay', action='store', default=DEFAULT_RELAY,
                         help='comma separated urls of relays to connect to - default %s' % DEFAULT_RELAY)
-    parser.add_argument('-a', '--as', action='store', default=None,dest='as_user',
+    parser.add_argument('-a', '--as_user', action='store', default=None,dest='as_user',
                         help='nsec/npub/hex or alias for account viewing as - default %s' % None)
     parser.add_argument('-b', '--bootstrap', action='store', default=None,
                         help='nsec/npub/hex or alias for accounts used for bootstrapping - default %s' % None)
