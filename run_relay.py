@@ -44,6 +44,7 @@ import os
 import asyncio
 import signal
 import argparse
+from copy import copy
 from pathlib import Path
 from monstr.relay.relay import Relay
 from monstr.relay.accept_handlers import LengthAcceptReqHandler
@@ -213,7 +214,7 @@ def get_args() -> dict:
         del ret['pg_password']
 
     # don't out the password
-    ret_out = ret
+    ret_out = copy(ret)
     if 'pg_password' in ret:
         ret_out['pg_password'] = '****'
 
