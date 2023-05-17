@@ -1,0 +1,3 @@
+[submodule "monstr"]
+	path = monstr
+	url = https://github.com/monty888/monstr.git
