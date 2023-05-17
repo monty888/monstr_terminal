@@ -1,9 +1,9 @@
 # install
-> git clone https://github.com/monty888/monstr_terminal.git  
-> cd monstr_terminal  
-> python3 -m venv venv  
-> source venv/bin/activate  
-> pip install -r requirements.txt
+> git clone --recurse-submodules https://github.com/monty888/monstr_terminal.git  
+> python3 -m venv venv   
+> source venv/bin/activate   
+> pip install -r requirements.txt   
+> pip install ./monstr
 
 # event view
 nostr event viewer for the command line. 
