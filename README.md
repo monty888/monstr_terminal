@@ -13,30 +13,29 @@ nostr event viewer for the command line.
 
 
 ```commandline
-usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA]
-                     [-s SINCE] [-u UNTIL] [-d]
+usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-j] [-d]
 
 view nostr events from the command line
 
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[wss://nos.lol]
+                        comma separated nostr relays to connect to, default[wss://nostr-pub.wellorder.net,wss://nos.lol]
   -a AS_USER, --as_user AS_USER
-                        alias, priv_k or pub_k of user to view as. If only created from
-                        pub_k then kind 4 encrypted events will be left encrypted,
+                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left encrypted,
                         default[monty]
   --view_profiles VIEW_PROFILES
-                        additional comma separated alias, priv_k or pub_k of user to view,
-                        default[None]
-  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be
-                        used as public inbox with wrapped events, default[None]
+                        additional comma separated alias, priv_k or pub_k of user to view, default[None]
+  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with wrapped events, default[None]
+  -i EID, --id EID      comma separated event ids will be added as e tag filter e.g with kind=42 can be used to view a chat channel, default[None]
+  -k KINDS, --kinds KINDS
+                        comma separated event kinds to output, default[1,4]
   -s SINCE, --since SINCE
                         show events n hours previous to running, default [6]
   -u UNTIL, --until UNTIL
                         show events n hours after since, default [None]
+  -j, --json            output the event in it's raw json format
   -d, --debug           enable debug output
-
 ```
 
 
