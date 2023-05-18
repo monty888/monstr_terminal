@@ -60,7 +60,8 @@ SINCE = 6
 UNTIL = None
 # so we can just use a file
 CONFIG_FILE = f'{WORK_DIR}event_view.toml'
-
+# default output event kinds
+KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
 
 def get_profiles_from_keys(keys: str,
                            private_only=False,
@@ -86,9 +87,7 @@ def get_profiles_from_keys(keys: str,
 
         # is it an alias?
         elif alias_map:
-            print('lookup', c_key)
             p: Profile = alias_map.get_profile(c_key)
-            print(p)
             if p:
                 the_key = p.keys
             else:
@@ -104,7 +103,7 @@ def get_profiles_from_keys(keys: str,
 
 async def get_from_config(config,
                           profile_handler: ProfileEventHandlerInterface):
-    as_user:Profile = None
+    as_user: Profile = None
     all_view = []
     view_extra = []
     inboxes = []
@@ -132,8 +131,8 @@ async def get_from_config(config,
             raise ConfigError(f'unable to find/create as_user profile - {config["as_user"]}')
 
         c_c: Contact
-        print(f'looking up contacts for user {as_user.display_name()}...')
-        contacts = await profile_handler.load_contacts(as_user)
+        await profile_handler.load_contacts(as_user)
+        contacts = as_user.contacts
         if contacts:
             contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
                                                             create_missing=True)
@@ -177,15 +176,29 @@ async def get_from_config(config,
     except ValueError as e:
         raise ConfigError('since - %s not a numeric value' % config['since'])
 
-
+    # extract
     until = config['until']
     try:
         if config['until'] is not None:
             until = int(config['until'])
     except ValueError as e:
-        raise ConfigError('until - %s not a numeric value' % config['until'])
+        raise ConfigError(f'until - {config["until"]} not a numeric value')
 
-    return {
+
+    # kind of events that'll we output
+    try:
+        kinds = {int(v) for v in config['kinds'].split(',')}
+    except ValueError as e:
+        raise ConfigError(f'kinds should be integer values got {config["kinds"]}')
+
+    # mentioned events
+    if config['eid']:
+        config['eid'] = config['eid'].split(',')
+        for c_id in config['eid']:
+            if not Event.is_event_id(c_id):
+                raise ConfigError(f'id mentioned event does\'t look like a valid event id {config["kinds"]}')
+
+    config.update({
         'as_user': as_user,
         'all_view': all_view,
         'view_extra': view_extra,
@@ -193,18 +206,22 @@ async def get_from_config(config,
         'inbox_keys': inbox_keys,
         'shared_keys': shared_keys,
         'since': since,
-        'until': until
-    }
+        'until': until,
+        'kinds': kinds
+    })
+    return config
 
 
 class MyAccept(EventAccepter):
 
     def __init__(self,
+                 kinds,
                  as_user: Profile = None,
                  view_profiles: [Profile] = None,
                  public_inboxes: [Profile] = None,
                  since=None):
 
+        self._kinds = kinds
         self._as_user = as_user
         self._view_profiles = view_profiles
         self._inboxes = public_inboxes
@@ -212,6 +229,10 @@ class MyAccept(EventAccepter):
         self._view_keys = []
         self._make_view_keys()
         self._since = since
+
+    @property
+    def view_keys(self):
+        return self._view_keys
 
     def _make_view_keys(self):
         c_c: Contact
@@ -233,7 +254,7 @@ class MyAccept(EventAccepter):
 
         # for now we'll just deal with these, though there's no reason why we couldn't show details
         # for meta or contact events and possibly others
-        if evt.kind not in (Event.KIND_ENCRYPT, Event.KIND_TEXT_NOTE):
+        if evt.kind not in self._kinds:
             return False
 
         # no specific view so all events
@@ -268,11 +289,21 @@ def get_cmdline_args(args) -> dict:
                             additional comma separated alias(with priv_k) or priv_k that will be used 
                             as public inbox with wrapped events,
                             default[{args['via']}]""")
+    parser.add_argument('-i', '--id', action='store', default=args['eid'], dest='eid',
+                        help=f"""
+                                    comma separated event ids will be added as e tag filter e.g with kind=42 
+                                    can be used to view a chat channel,
+                                    default[{args['eid']}]""")
+    parser.add_argument('-k', '--kinds', action='store', default=args['kinds'],
+                        help=f"""
+                                comma separated event kinds to output,
+                                default[{args['kinds']}]""")
     parser.add_argument('-s', '--since', action='store', default=args['since'], type=int,
                         help=f'show events n hours previous to running, default [{args["since"]}]')
     parser.add_argument('-u', '--until', action='store', default=args['until'], type=int,
                         help=f'show events n hours after since, default [{args["until"]}]')
 
+    parser.add_argument('-j', '--json', action='store_true', help='output the event in it\'s raw json format', default=args['json'])
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
@@ -301,6 +332,9 @@ def get_args() -> dict:
         'via': INBOXES,
         'since': SINCE,
         'until': UNTIL,
+        'kinds': KINDS,
+        'eid': None,
+        'json': False,
         'debug': False
     }
 
@@ -314,6 +348,52 @@ def get_args() -> dict:
     if ret['debug'] is True:
         logging.getLogger().setLevel(logging.DEBUG)
         logging.debug(f'get_args:: running with options - {ret}')
+
+    return ret
+
+
+def get_event_filters(view_profiles: [Profile],
+                      since: datetime,
+                      until: int = None,
+                      mention_eids: [str] = None,
+                      kinds: [int] = [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT]):
+    ret = []
+    watch_keys = []
+    c_p: Profile
+    if view_profiles:
+        for c_p in view_profiles:
+            watch_keys.append(c_p.public_key)
+
+    # watch both from and mention for these keys
+    if watch_keys:
+        # events from accounts we follow
+        ret.append({
+            'since': util_funcs.date_as_ticks(since),
+            'kinds': kinds,
+            'authors': watch_keys
+        })
+        # events to/mention accounts we follow
+        ret.append({
+            'since': util_funcs.date_as_ticks(since),
+            'kinds': kinds,
+            '#p': watch_keys
+        })
+
+    else:
+        # all note and encrypt events
+        ret.append({
+            'since': util_funcs.date_as_ticks(since),
+            'kinds': kinds
+        })
+
+    # if given add until filter to the note/encrypt event filters
+    if until or mention_eids:
+        for c_f in ret:
+            if until:
+                c_f['until'] = until
+            if mention_eids:
+                c_f['#e'] = mention_eids
+
 
     return ret
 
@@ -344,11 +424,22 @@ async def main(args):
 
     as_user: Profile = config['as_user']
     view_profiles = config['all_view']
+
     inboxes = config['inboxes']
     inbox_keys = config['inbox_keys']
     share_keys = config['shared_keys']
     since = config['since']
     until = config['until']
+
+    # if this is true then output is just the json as we recieve ot
+    output_json = config['json']
+
+    # the event kinds that we subscribe to and output
+    view_kinds = config['kinds']
+
+    # only view events that mention this event
+    mention_eids = config['eid']
+
 
     async def print_run_info():
         c_p: Profile
@@ -384,9 +475,9 @@ async def main(args):
             for c_p in inboxes:
                 print(c_p.display_name())
 
-        print('showing events from now minus %s hours' % since)
+        print(f'showing events of kind {view_kinds} from now minus {since} hours')
         if until:
-            print('until %s hours from this point' % until)
+            print(f'until {until} hours from this point')
     # show run info
     await print_run_info()
     # change to since to point in time
@@ -420,8 +511,8 @@ async def main(args):
             await profile_handler.get_profiles(list(ukeys),
                                                create_missing=True)
 
-            for c_evt in events:
-                my_printer.do_event(the_client, sub_id, c_evt)
+            # output events
+            [my_printer.do_event(the_client, sub_id, c_evt) for c_evt in events]
 
         asyncio.create_task(do_events())
 
@@ -440,76 +531,49 @@ async def main(args):
             }
         ]
 
-        # bit shit look at this
-        # watch_keys = []
-        # if as_user:
-        #     watch_keys = as_user.contacts.follow_keys() + [as_user.public_key]
-        # if inbox_keys:
-        #     k: Keys
-        #     for k in inbox_keys:
-        #         watch_keys.append(k.public_key_hex())
-        #
-        #     # watch_keys = watch_keys + inbox_keys
-        watch_keys = []
-        if view_profiles:
-            c_p: Profile
-            for c_p in view_profiles:
-                watch_keys.append(c_p.public_key)
+        # TODO: not checked but I think if using inbox you always need to fetch type 4s
+        fetch_kinds = list(view_kinds)
+        if inboxes and Event.KIND_ENCRYPT not in fetch_kinds:
+            fetch_kinds.append(Event.KIND_ENCRYPT)
 
-        # watch both from and mention for these keys
-        if watch_keys:
-            # events from accounts we follow
-            my_filters.append({
-                'since': util_funcs.date_as_ticks(use_since),
-                'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                'authors': watch_keys
-            })
-            # events to/mention accounts we follow
-            my_filters.append({
-                'since': util_funcs.date_as_ticks(use_since),
-                'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                '#p': watch_keys
-            })
-
-        else:
-            # all note and encrypt events
-            my_filters.append({
-                'since': util_funcs.date_as_ticks(use_since),
-                'kinds': [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT]
-            })
-
-        # if given add until filter to the note/encrypt event filters
-        if until:
-            for c_f in range(1,len(my_filters)):
-                my_filters[c_f]['until'] = until
-
-        # don't think this relay even exists anymore so rem
-        # note in the case of wss://rsslay.fiatjaf.com it looks like author is required to receive anything
-        # if the_client.url == 'wss://rsslay.fiatjaf.com':
-        #    e_filter['authors'] = [p.public_key for p in view_profiles]
+        my_filters = my_filters + get_event_filters(view_profiles=view_profiles,
+                                                    since=use_since,
+                                                    until=until,
+                                                    mention_eids=mention_eids,
+                                                    kinds=fetch_kinds)
 
         the_client.subscribe(handlers=[profile_handler, my_printer], filters=my_filters)
 
         since_url[the_client.url] = datetime.now()
 
-    # prints out the events - NotOnlyNumbersAcceptor to get rid of some spam,
-    # probably if could accept whitelist
+    # actually does the outputting
     my_printer = PrintEventHandler(profile_handler=profile_handler,
                                    event_acceptors=[DeduplicateAcceptor(),
                                                     LengthAcceptor(),
                                                     NotOnlyNumbersAcceptor(),
-                                                    MyAccept(as_user=as_user,
+                                                    # this is mainly duplicate because the filter we apply means must of what
+                                                    # we'll recieve we want to output, the one exception at the moment is the
+                                                    # contact events, we register for all but we don't want to output all
+                                                    MyAccept(kinds=view_kinds,
+                                                             as_user=as_user,
                                                              view_profiles=view_profiles,
                                                              public_inboxes=inboxes,
-                                                             since=since)])
+                                                             since=since)
+                                                    ])
+
+
     # we'll attach our own evt printer rather than basic 1 liner of PrintEventHandler
     my_print = FormattedEventPrinter(profile_handler=profile_handler,
                                      as_user=as_user,
                                      inbox_keys=inbox_keys,
                                      share_keys=share_keys)
 
-    async def my_display(the_client: Client, sub_id: str, evt: [Event]):
-        await my_print.print_event(evt)
+    async def my_display(the_client: Client, sub_id: str, evt: Event):
+        # just output the event data as is
+        if output_json:
+            print(evt.event_data())
+        else:
+            await my_print.print_event(evt)
 
     my_printer.display_func = my_display
 

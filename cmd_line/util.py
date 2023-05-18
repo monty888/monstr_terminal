@@ -187,10 +187,10 @@ class FormattedEventPrinter:
             txt_arr.append(('', '\n%s' % depth_align))
             txt_arr.append(('', '[subject - %s]' % ','.join(subject_tags)))
 
-        hash_tags = evt.get_tags_value('hashtag')
-        if hash_tags:
-            txt_arr.append(('', '\n%s' % depth_align))
-            txt_arr.append(('', '[hashtags - %s]' % ','.join(hash_tags)))
+        # hash_tags = evt.get_tags_value('t') + evt.get_tags_value('hashtag')
+        # if hash_tags:
+        #     txt_arr.append(('', '\n%s' % depth_align))
+        #     txt_arr.append(('', '[hashtags - %s]' % ','.join(hash_tags)))
 
         # if to_list:
         #     ret_arr.append('%s-> %s' % (depth_align, to_list))
@@ -201,21 +201,11 @@ class FormattedEventPrinter:
         txt_arr.append(('','@'))
         txt_arr.append(('', '%s' % evt.created_at))
 
-        print_formatted_text(FormattedText(txt_arr))
+        # extra kind specific header
+        if evt.kind == Event.KIND_CHANNEL_MESSAGE and evt.e_tags:
+            txt_arr.append(('', f'\nchannel: {evt.e_tags[0]}'))
 
-    # async def tag_substitution(self, content: str, tags: []):
-    #     """
-    #     replace p tags with the display name (shortend pub_k if not found)
-    #     unformatted should also so move from here
-    #     :param content:
-    #     :param tags:
-    #     :return:
-    #     """
-    #     for i, c_pk in enumerate(tags):
-    #         rep_str = '#[%s]' % i
-    #         content = content.replace(rep_str, '@%s' % await self._get_profile(c_pk).display_name())
-    #
-    #     return content
+        print_formatted_text(FormattedText(txt_arr))
 
     async def highlight_tags(self, content: str, p_tags: [], default_style=''):
         replacements = {}
