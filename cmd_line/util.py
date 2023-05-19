@@ -18,7 +18,8 @@ class EventPrinter:
                  profile_handler: ProfileEventHandler,
                  as_user: Profile = None,
                  inbox_keys=None,
-                 share_keys=None):
+                 share_keys=None,
+                 show_tags: [str] = None):
 
         self._profile_handler = profile_handler
         self._as_user = as_user
@@ -98,7 +99,8 @@ class FormattedEventPrinter:
                  profile_handler: ProfileEventHandler,
                  as_user: Profile = None,
                  inbox_keys: [Keys] =None,
-                 share_keys=None):
+                 share_keys=None,
+                 show_tags: [str] = None):
 
         self._profile_handler = profile_handler
         self._as_user = as_user
@@ -121,9 +123,15 @@ class FormattedEventPrinter:
         self._other_user_key = 'green'
         self._full_keys = False
 
+        # output these tags or all if ['*']
+        self._show_tags = show_tags
+        if self._show_tags:
+            self._show_tags = set(self._show_tags)
+
     async def print_event(self, evt: Event):
         await self.print_event_header(evt)
         await self.print_event_content(evt)
+        await self.print_event_footer(evt)
 
     async def _get_profile(self, key) -> Profile:
         # will error if key is not valid, doesn't break anything for us but maybe we should fix?
@@ -206,6 +214,23 @@ class FormattedEventPrinter:
             txt_arr.append(('', f'\nchannel: {evt.e_tags[0]}'))
 
         print_formatted_text(FormattedText(txt_arr))
+
+    async def print_event_footer(self,
+                           evt: Event,
+                           depth=0):
+
+        if self._show_tags:
+            txt_arr = []
+            depth_align = ''.join(['\t'] * depth)
+
+            all_tag_names = {c_tag[0] for c_tag in evt.tags}
+            for c_tag_name in all_tag_names:
+                if '*' in self._show_tags or c_tag_name in self._show_tags:
+                    txt_arr.append(('', f'#{c_tag_name}\n'))
+                    for c_tag_v in evt.get_tags_value(c_tag_name):
+                        txt_arr.append(('', f'{c_tag_v}\n'))
+
+            print_formatted_text(FormattedText(txt_arr))
 
     async def highlight_tags(self, content: str, p_tags: [], default_style=''):
         replacements = {}

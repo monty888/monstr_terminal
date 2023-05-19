@@ -1,15 +1,15 @@
 """
-usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-j] [-d]
+usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-t TAGS] [-j] [-d]
 
 view nostr events from the command line
 
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[wss://nostr-pub.wellorder.net,wss://nos.lol]
+                        comma separated nostr relays to connect to, default[relay]
   -a AS_USER, --as_user AS_USER
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left encrypted,
-                        default[monty]
+                        default[user]
   --view_profiles VIEW_PROFILES
                         additional comma separated alias, priv_k or pub_k of user to view, default[None]
   -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with wrapped events, default[None]
@@ -20,8 +20,10 @@ options:
                         show events n hours previous to running, default [6]
   -u UNTIL, --until UNTIL
                         show events n hours after since, default [None]
+  -t TAGS, --tags TAGS  comma separated tag types to output, =* for all default[None]
   -j, --json            output the event in it's raw json format
   -d, --debug           enable debug output
+
 """
 import logging
 import sys
@@ -108,6 +110,7 @@ async def get_from_config(config,
     inboxes = []
     inbox_keys = []
     shared_keys = []
+    tags = config['tags']
 
     # TODO allow the alias file to be changed
     alias_file = '%sprofiles.csv' % WORK_DIR
@@ -190,6 +193,12 @@ async def get_from_config(config,
     except ValueError as e:
         raise ConfigError(f'kinds should be integer values got {config["kinds"]}')
 
+    if tags:
+        if tags == 'none':
+            tags = None
+        else:
+            tags = tags.split(',')
+
     # mentioned events
     if config['eid']:
         config['eid'] = config['eid'].split(',')
@@ -206,7 +215,8 @@ async def get_from_config(config,
         'shared_keys': shared_keys,
         'since': since,
         'until': until,
-        'kinds': kinds
+        'kinds': kinds,
+        'tags': tags
     })
     return config
 
@@ -301,7 +311,10 @@ def get_cmdline_args(args) -> dict:
                         help=f'show events n hours previous to running, default [{args["since"]}]')
     parser.add_argument('-u', '--until', action='store', default=args['until'], type=int,
                         help=f'show events n hours after since, default [{args["until"]}]')
-
+    parser.add_argument('-t', '--tags', action='store', default=args['tags'],
+                        help=f"""
+                                    comma separated tag types to output, =* for all
+                                    default[{args['tags']}]""")
     parser.add_argument('-j', '--json', action='store_true', help='output the event in it\'s raw json format', default=args['json'])
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
@@ -332,6 +345,7 @@ def get_args() -> dict:
         'since': SINCE,
         'until': UNTIL,
         'kinds': KINDS,
+        'tags': None,
         'eid': None,
         'json': False,
         'debug': False
@@ -439,6 +453,8 @@ async def main(args):
     # only view events that mention this event
     mention_eids = config['eid']
 
+    # output these event tags
+    show_tags = config['tags']
 
     async def print_run_info():
         c_p: Profile
@@ -565,7 +581,8 @@ async def main(args):
     my_print = FormattedEventPrinter(profile_handler=profile_handler,
                                      as_user=as_user,
                                      inbox_keys=inbox_keys,
-                                     share_keys=share_keys)
+                                     share_keys=share_keys,
+                                     show_tags=show_tags)
 
     async def my_display(the_client: Client, sub_id: str, evt: Event):
         # just output the event data as is
