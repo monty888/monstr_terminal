@@ -227,9 +227,8 @@ class FormattedEventPrinter:
             for c_tag_name in all_tag_names:
                 if '*' in self._show_tags or c_tag_name in self._show_tags:
                     txt_arr.append(('', f'#{c_tag_name}\n'))
-                    for c_tag_v in evt.get_tags_value(c_tag_name):
+                    for c_tag_v in evt.get_tags(c_tag_name):
                         txt_arr.append(('', f'{c_tag_v}\n'))
-
             print_formatted_text(FormattedText(txt_arr))
 
     async def highlight_tags(self, content: str, p_tags: [], default_style=''):

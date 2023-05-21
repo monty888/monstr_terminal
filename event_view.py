@@ -32,11 +32,12 @@ import asyncio
 import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
+import aioconsole
 from monstr.ident.profile import Profile, Contact
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
-from monstr.client.event_handlers import PrintEventHandler, EventAccepter, DeduplicateAcceptor, LengthAcceptor, NotOnlyNumbersAcceptor
+from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, NotOnlyNumbersAcceptor, EventHandler
 from monstr.util import util_funcs
 from monstr.event.event import Event
 from monstr.encrypt import Keys
@@ -63,6 +64,9 @@ UNTIL = None
 CONFIG_FILE = f'{WORK_DIR}event_view.toml'
 # default output event kinds
 KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
+# for non contacts event must reach this pow to be output
+POW = None
+
 
 def get_profiles_from_keys(keys: str,
                            private_only=False,
@@ -221,23 +225,20 @@ async def get_from_config(config,
     return config
 
 
-class MyAccept(EventAccepter):
+class MyClassifier:
 
     def __init__(self,
-                 kinds,
+                 event_ids: [str] = None,
                  as_user: Profile = None,
                  view_profiles: [Profile] = None,
-                 public_inboxes: [Profile] = None,
-                 since=None):
+                 public_inboxes: [Profile] = None):
 
-        self._kinds = kinds
         self._as_user = as_user
         self._view_profiles = view_profiles
         self._inboxes = public_inboxes
-
         self._view_keys = []
         self._make_view_keys()
-        self._since = since
+        self._event_ids = event_ids
 
     @property
     def view_keys(self):
@@ -257,22 +258,56 @@ class MyAccept(EventAccepter):
         if self._inboxes is not None:
             self._view_keys = self._view_keys + [c_p.public_key for c_p in self._inboxes]
 
-    def accept_event(self, evt: Event) -> bool:
-        if self._since is not None and evt.created_at < self._since:
-            return False
+    def classify(self, evt: Event):
+        # we requested it but it might still be considered spam, we mark here
+        # if maybe spam is returned then extra test on event might happen
+        # currently nip5 check
+        ret = 'maybe spam'
 
-        # for now we'll just deal with these, though there's no reason why we couldn't show details
-        # for meta or contact events and possibly others
-        if evt.kind not in self._kinds:
-            return False
+        # we specifically asked for this event
+        if self._event_ids and evt.id in self._event_ids:
+            ret = 'good'
 
-        # no specific view so all events
-        if not self._view_keys:
-            return True
-        else:
-            return evt.pub_key in self._view_keys or \
-                   self._as_user is not None and \
-                   (self._as_user.public_key in evt.pub_key or self._as_user.public_key in evt.p_tags)
+        # event pub_k it to or from keys we have specificly mentioned
+        elif evt.pub_key in self._view_keys or \
+                self._as_user is not None and \
+                (self._as_user.public_key in evt.pub_key or self._as_user.public_key in evt.p_tags):
+            ret = 'good'
+        return ret
+
+
+class PrintEventHandler(EventHandler):
+    """
+       print handler
+       printer should be a class with a print_event(Event) method
+    """
+    def __init__(self,
+                 event_acceptors=[],
+                 profile_handler: ProfileEventHandlerInterface = None,
+                 printer=None,
+                 claissifier=None):
+
+        self._profile_handler = profile_handler
+        self._printer = printer
+        self._classifier: MyClassifier = claissifier
+
+        super().__init__(event_acceptors)
+
+    def do_event(self, the_client: Client, sub_id, evt: Event):
+        if not self.accept_event(the_client, sub_id, evt):
+            return
+
+        if self._classifier:
+            if self._classifier.classify(evt) == 'good':
+                asyncio.create_task(self._printer.print_event(evt))
+            else:
+                asyncio.create_task(self._printer.print_event(evt))
+
+
+class JSONPrinter:
+
+    async def print_event(self, evt: Event):
+        await aioconsole.aprint(evt.event_data())
 
 
 def get_cmdline_args(args) -> dict:
@@ -315,6 +350,13 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                     comma separated tag types to output, =* for all
                                     default[{args['tags']}]""")
+
+    parser.add_argument('-p', '--pow', action='store', choices=[8,12, 16, 20, 24, 28, 32], default=args['pow'],
+                        type=int,
+                        help=f"""
+                                        minimum amount required for events excluding contacts of as_user
+                                        default[{args['pow']}]""")
+
     parser.add_argument('-j', '--json', action='store_true', help='output the event in it\'s raw json format', default=args['json'])
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
@@ -345,10 +387,11 @@ def get_args() -> dict:
         'since': SINCE,
         'until': UNTIL,
         'kinds': KINDS,
+        'pow': POW,
         'tags': None,
         'eid': None,
         'json': False,
-        'debug': False
+        'debug': False,
     }
 
     # now form config file if any
@@ -369,7 +412,8 @@ def get_event_filters(view_profiles: [Profile],
                       since: datetime,
                       until: int = None,
                       mention_eids: [str] = None,
-                      kinds: [int] = [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT]):
+                      kinds: [int] = [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
+                      pow: int = None):
     ret = []
     watch_keys = []
     c_p: Profile
@@ -379,25 +423,35 @@ def get_event_filters(view_profiles: [Profile],
 
     # watch both from and mention for these keys
     if watch_keys:
-        # events from accounts we follow
+        # events from accounts we follow, pow if any, not applied
         ret.append({
             'since': util_funcs.date_as_ticks(since),
             'kinds': kinds,
             'authors': watch_keys
         })
-        # events to/mention accounts we follow
-        ret.append({
+        # events to/mention accounts we follow, pow if any, applied
+        from_filter = {
             'since': util_funcs.date_as_ticks(since),
             'kinds': kinds,
             '#p': watch_keys
-        })
+        }
+        if pow:
+            # POW adds extra 0 per 4 bits on the id required
+            from_filter['ids'] = [''.join(['0'] * (int(pow / 4)))]
+        ret.append(from_filter)
 
-    else:
+    # general all events used if no given keys to watch or if pow where event meet that threshold
+    if not watch_keys:
         # all note and encrypt events
-        ret.append({
+        gen_filter = {
             'since': util_funcs.date_as_ticks(since),
             'kinds': kinds
-        })
+        }
+        if pow:
+            # POW adds extra 0 per 4 bits on the id required
+            gen_filter['ids'] = [''.join(['0']*(int(pow/4)))]
+
+        ret.append(gen_filter)
 
     # if given add until filter to the note/encrypt event filters
     if until or mention_eids:
@@ -407,6 +461,11 @@ def get_event_filters(view_profiles: [Profile],
             if mention_eids:
                 c_f['#e'] = mention_eids
 
+    # any requested eventids we'll fetch regardless of by who or when
+    if mention_eids:
+        ret.append({
+            'ids': mention_eids
+        })
 
     return ret
 
@@ -449,6 +508,11 @@ async def main(args):
 
     # the event kinds that we subscribe to and output
     view_kinds = config['kinds']
+
+    # bits of pow to events from any accounts we didn't request
+    # FIXME: currently this is a plied only to events that are not from or to accounts we asked for
+    # probably the filter should be applied on the to also?
+    pow = config['pow']
 
     # only view events that mention this event
     mention_eids = config['eid']
@@ -527,7 +591,7 @@ async def main(args):
                                                create_missing=True)
 
             # output events
-            [my_printer.do_event(the_client, sub_id, c_evt) for c_evt in events]
+            [print_handler.do_event(the_client, sub_id, c_evt) for c_evt in events]
 
         asyncio.create_task(do_events())
 
@@ -537,61 +601,49 @@ async def main(args):
         if the_client.url in since_url:
             use_since = since_url[the_client.url]
 
-        # filter for our main subscription
-        my_filters = [
-            # all metas from this point on
+        # sub just for keeping profiles upto date
+        the_client.subscribe(handlers=[profile_handler], filters=[
             {
                 'kinds': [Event.KIND_META],
                 'since': util_funcs.date_as_ticks(datetime.now())
             }
-        ]
+        ])
 
+        # sub for what we'll output to screen
         # TODO: not checked but I think if using inbox you always need to fetch type 4s
         fetch_kinds = list(view_kinds)
         if inboxes and Event.KIND_ENCRYPT not in fetch_kinds:
             fetch_kinds.append(Event.KIND_ENCRYPT)
-
-        my_filters = my_filters + get_event_filters(view_profiles=view_profiles,
-                                                    since=use_since,
-                                                    until=until,
-                                                    mention_eids=mention_eids,
-                                                    kinds=fetch_kinds)
-
-        the_client.subscribe(handlers=[profile_handler, my_printer], filters=my_filters)
+        event_filter = get_event_filters(view_profiles=view_profiles,
+                                         since=use_since,
+                                         until=until,
+                                         mention_eids=mention_eids,
+                                         kinds=fetch_kinds,
+                                         pow=pow)
+        the_client.subscribe(handlers=[print_handler], filters=event_filter)
 
         since_url[the_client.url] = datetime.now()
 
     # actually does the outputting
-    my_printer = PrintEventHandler(profile_handler=profile_handler,
-                                   event_acceptors=[DeduplicateAcceptor(),
-                                                    LengthAcceptor(),
-                                                    NotOnlyNumbersAcceptor(),
-                                                    # this is mainly duplicate because the filter we apply means must of what
-                                                    # we'll recieve we want to output, the one exception at the moment is the
-                                                    # contact events, we register for all but we don't want to output all
-                                                    MyAccept(kinds=view_kinds,
-                                                             as_user=as_user,
-                                                             view_profiles=view_profiles,
-                                                             public_inboxes=inboxes,
-                                                             since=since)
-                                                    ])
+    if output_json:
+        my_printer = JSONPrinter()
+    else:
+        my_printer = FormattedEventPrinter(profile_handler=profile_handler,
+                                           as_user=as_user,
+                                           inbox_keys=inbox_keys,
+                                           share_keys=share_keys,
+                                           show_tags=show_tags)
 
-
-    # we'll attach our own evt printer rather than basic 1 liner of PrintEventHandler
-    my_print = FormattedEventPrinter(profile_handler=profile_handler,
-                                     as_user=as_user,
-                                     inbox_keys=inbox_keys,
-                                     share_keys=share_keys,
-                                     show_tags=show_tags)
-
-    async def my_display(the_client: Client, sub_id: str, evt: Event):
-        # just output the event data as is
-        if output_json:
-            print(evt.event_data())
-        else:
-            await my_print.print_event(evt)
-
-    my_printer.display_func = my_display
+    # event handler for printing events
+    print_handler = PrintEventHandler(profile_handler=profile_handler,
+                                      event_acceptors=[DeduplicateAcceptor(),
+                                                       LengthAcceptor(),
+                                                       NotOnlyNumbersAcceptor()],
+                                      printer=my_printer,
+                                      claissifier=MyClassifier(event_ids=mention_eids,
+                                                               as_user=as_user,
+                                                               view_profiles=view_profiles,
+                                                               public_inboxes=inboxes))
 
     # we end and reconnect - bit hacky but just makes thing easier to set in action
     my_client.set_on_eose(my_eose)
