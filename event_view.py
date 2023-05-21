@@ -33,7 +33,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
 import aioconsole
-from monstr.ident.profile import Profile, Contact
+from monstr.ident.profile import Profile, Contact, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
@@ -273,6 +273,7 @@ class MyClassifier:
                 self._as_user is not None and \
                 (self._as_user.public_key in evt.pub_key or self._as_user.public_key in evt.p_tags):
             ret = 'good'
+
         return ret
 
 
@@ -285,23 +286,41 @@ class PrintEventHandler(EventHandler):
                  event_acceptors=[],
                  profile_handler: ProfileEventHandlerInterface = None,
                  printer=None,
-                 claissifier=None):
+                 classifier=None,
+                 nip5=False,
+                 pow=False):
 
         self._profile_handler = profile_handler
         self._printer = printer
-        self._classifier: MyClassifier = claissifier
-
+        self._classifier: MyClassifier = classifier
+        self._nip_checker = NIP5Helper()
+        self._pow = pow
+        self._nip5 = nip5
         super().__init__(event_acceptors)
+
+    async def _printer_event_if_nip5(self, evt: Event) -> bool:
+        p: Profile = await self._profile_handler.get_profile(evt.pub_key)
+        if await self._nip_checker.is_valid_profile(p):
+            await self._printer.print_event(evt)
 
     def do_event(self, the_client: Client, sub_id, evt: Event):
         if not self.accept_event(the_client, sub_id, evt):
             return
 
         if self._classifier:
-            if self._classifier.classify(evt) == 'good':
+            rating = self._classifier.classify(evt)
+            # good events will output always
+            # maybe spam events will pass
+            #   if pow and nip5 are both false
+            #   if pow is true and nip5 is false
+            #   if pow is false and nip5 is true and nip5 validates
+            #   if pow is true and nip5 is true and nip5 validates
+            if rating == 'good' or (self._pow is False and self._nip5 is False):
                 asyncio.create_task(self._printer.print_event(evt))
-            else:
+            elif self._pow and self._nip5 is False:
                 asyncio.create_task(self._printer.print_event(evt))
+            elif self._nip5:
+                asyncio.create_task(self._printer_event_if_nip5(evt))
 
 
 class JSONPrinter:
@@ -357,13 +376,15 @@ def get_cmdline_args(args) -> dict:
                                         minimum amount required for events excluding contacts of as_user
                                         default[{args['pow']}]""")
 
+    parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of as_user',
+                        default=args['nip5'])
     parser.add_argument('-j', '--json', action='store_true', help='output the event in it\'s raw json format', default=args['json'])
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
 
     # so --as_user opt can be overridden empty if its defined in config file
-    if ret.as_user=='' or ret.as_user.lower() == 'none':
+    if ret.as_user =='' or ret.as_user.lower() == 'none':
         ret.as_user = None
 
     return vars(ret)
@@ -388,6 +409,7 @@ def get_args() -> dict:
         'until': UNTIL,
         'kinds': KINDS,
         'pow': POW,
+        'nip5': False,
         'tags': None,
         'eid': None,
         'json': False,
@@ -510,9 +532,11 @@ async def main(args):
     view_kinds = config['kinds']
 
     # bits of pow to events from any accounts we didn't request
-    # FIXME: currently this is a plied only to events that are not from or to accounts we asked for
-    # probably the filter should be applied on the to also?
     pow = config['pow']
+
+    # nip5 required for events from any accounts we didn't request
+    # if both pow and nip5 are requested then both needed for those events to be output
+    nip5 = config['nip5']
 
     # only view events that mention this event
     mention_eids = config['eid']
@@ -591,7 +615,7 @@ async def main(args):
                                                create_missing=True)
 
             # output events
-            [print_handler.do_event(the_client, sub_id, c_evt) for c_evt in events]
+            [print_handler.do_event(the_client, sub_id, c_evt) for c_evt in events if c_evt.kind in view_kinds]
 
         asyncio.create_task(do_events())
 
@@ -640,10 +664,12 @@ async def main(args):
                                                        LengthAcceptor(),
                                                        NotOnlyNumbersAcceptor()],
                                       printer=my_printer,
-                                      claissifier=MyClassifier(event_ids=mention_eids,
-                                                               as_user=as_user,
-                                                               view_profiles=view_profiles,
-                                                               public_inboxes=inboxes))
+                                      classifier=MyClassifier(event_ids=mention_eids,
+                                                              as_user=as_user,
+                                                              view_profiles=view_profiles,
+                                                              public_inboxes=inboxes),
+                                      pow=pow is not None,
+                                      nip5=nip5)
 
     # we end and reconnect - bit hacky but just makes thing easier to set in action
     my_client.set_on_eose(my_eose)
