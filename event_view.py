@@ -37,7 +37,7 @@ from monstr.ident.profile import Profile, Contact, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
-from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, NotOnlyNumbersAcceptor, EventHandler
+from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, NotOnlyNumbersAcceptor, EventHandler, LastEventHandler
 from monstr.util import util_funcs
 from monstr.event.event import Event
 from monstr.encrypt import Keys
@@ -298,29 +298,58 @@ class PrintEventHandler(EventHandler):
         self._nip5 = nip5
         super().__init__(event_acceptors)
 
-    async def _printer_event_if_nip5(self, evt: Event) -> bool:
+    async def _printer_event_if_nip5(self, evt: Event):
         p: Profile = await self._profile_handler.get_profile(evt.pub_key)
-        if await self._nip_checker.is_valid_profile(p):
-            await self._printer.print_event(evt)
+        try:
+            if await self._nip_checker.is_valid_profile(p):
+                await self._printer.print_event(evt)
+        except NIP5Error as ne:
+            logging.debug(f'PrintEventHandler::_printer_event_if_nip5 ignored event {evt.id} publisher has bad nip5')
 
-    def do_event(self, the_client: Client, sub_id, evt: Event):
-        if not self.accept_event(the_client, sub_id, evt):
+    async def _profiles_prefetch(self, events: [Event]):
+        ukeys = set()
+        for c_evt in events:
+            ukeys.add(c_evt.pub_key)
+            for c_tag in c_evt.p_tags:
+                ukeys.add(c_tag)
+        await self._profile_handler.get_profiles(list(ukeys),
+                                                 create_missing=True)
+
+    async def ado_event(self, the_client: Client, sub_id, evt: Event):
+        c_evt: Event
+        if isinstance(evt, Event):
+            evt = [evt]
+
+        to_print = []
+        for c_evt in evt:
+            if self.accept_event(the_client, sub_id, c_evt):
+                to_print.append(c_evt)
+
+        if not to_print:
             return
 
-        if self._classifier:
-            rating = self._classifier.classify(evt)
-            # good events will output always
-            # maybe spam events will pass
-            #   if pow and nip5 are both false
-            #   if pow is true and nip5 is false
-            #   if pow is false and nip5 is true and nip5 validates
-            #   if pow is true and nip5 is true and nip5 validates
-            if rating == 'good' or (self._pow is False and self._nip5 is False):
-                asyncio.create_task(self._printer.print_event(evt))
-            elif self._pow and self._nip5 is False:
-                asyncio.create_task(self._printer.print_event(evt))
-            elif self._nip5:
-                asyncio.create_task(self._printer_event_if_nip5(evt))
+        Event.sort(to_print, inplace=True, reverse=False)
+        await self._profiles_prefetch(to_print)
+
+        for c_evt in to_print:
+            if self._classifier:
+                rating = self._classifier.classify(c_evt)
+                # good events will output always
+                # maybe spam events will pass
+                #   if pow and nip5 are both false
+                #   if pow is true and nip5 is false
+                #   if pow is false and nip5 is true and nip5 validates
+                #   if pow is true and nip5 is true and nip5 validates
+                if rating == 'good' or (self._pow is False and self._nip5 is False):
+                    await self._printer.print_event(c_evt)
+                elif self._pow and self._nip5 is False:
+                    await self._printer.print_event(c_evt)
+                elif self._nip5:
+                    await self._printer_event_if_nip5(c_evt)
+
+    def do_event(self, the_client: Client, sub_id, evt: Event):
+        # client only supports sync do_event - maybe change?
+        asyncio.create_task(self.ado_event(the_client, sub_id, evt))
 
 
 class JSONPrinter:
@@ -435,7 +464,9 @@ def get_event_filters(view_profiles: [Profile],
                       until: int = None,
                       mention_eids: [str] = None,
                       kinds: [int] = [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                      pow: int = None):
+                      pow: int = None,
+                      nip5: bool = False):
+
     ret = []
     watch_keys = []
     c_p: Profile
@@ -452,15 +483,24 @@ def get_event_filters(view_profiles: [Profile],
             'authors': watch_keys
         })
         # events to/mention accounts we follow, pow if any, applied
-        from_filter = {
+        to_filter = {
             'since': util_funcs.date_as_ticks(since),
             'kinds': kinds,
             '#p': watch_keys
         }
         if pow:
             # POW adds extra 0 per 4 bits on the id required
-            from_filter['ids'] = [''.join(['0'] * (int(pow / 4)))]
-        ret.append(from_filter)
+            to_filter['ids'] = [''.join(['0'] * (int(pow / 4)))]
+
+        ret.append(to_filter)
+
+        # if no pow but nip5 unfortunately we'll need to add a filter without
+        # authors because we can't check nip5 until we have events
+        if pow is None and nip5:
+            ret.append({
+                'since': util_funcs.date_as_ticks(since),
+                'kinds': kinds
+            })
 
     # general all events used if no given keys to watch or if pow where event meet that threshold
     if not watch_keys:
@@ -544,6 +584,27 @@ async def main(args):
     # output these event tags
     show_tags = config['tags']
 
+    # keep track of last events seen so we can reconnect without getting same events again
+    last_event_track = LastEventHandler()
+
+    # just a wrap around get_event_filters so we don't have to call with all the
+    # fields all the time
+    def my_get_event_filters(with_since):
+        # sub for what we'll output to screen
+        # TODO: not checked but I think if using inbox you always need to fetch type 4s
+        fetch_kinds = list(view_kinds)
+        if inboxes and Event.KIND_ENCRYPT not in fetch_kinds:
+            fetch_kinds.append(Event.KIND_ENCRYPT)
+
+        return get_event_filters(view_profiles=view_profiles,
+                                 since=with_since,
+                                 until=until,
+                                 mention_eids=mention_eids,
+                                 kinds=fetch_kinds,
+                                 pow=pow,
+                                 nip5=nip5)
+
+
     async def print_run_info():
         c_p: Profile
         c_c: Contact
@@ -581,6 +642,9 @@ async def main(args):
         print(f'showing events of kind {view_kinds} from now minus {since} hours')
         if until:
             print(f'until {until} hours from this point')
+
+        print(f'pow for non follows ({pow}) and nip5 check ({nip5})')
+
     # show run info
     await print_run_info()
     # change to since to point in time
@@ -592,61 +656,29 @@ async def main(args):
     if until:
         until = util_funcs.date_as_ticks(since + timedelta(hours=until))
 
-    def my_eose(the_client: Client, sub_id: str, events):
-        # seems mutiple filters mean we get unpredictable order from the relay
-        # we probably shouldn't rely on order from relay anyhow
-        def my_sort(evt: Event):
-            return evt.created_at_ticks
-        events.sort(key=my_sort)
-        # profile_handler.do_event(the_client,sub_id, events)
-
-        # prfetch the profiles that we'll need
-        async def do_events():
-            c_evt: Event
-            ukeys = set()
-            for c_evt in events:
-                ukeys.add(c_evt.pub_key)
-                for c_tag in c_evt.p_tags:
-                    ukeys.add(c_tag)
-
-
-            # # force fetch of profiles
-            await profile_handler.get_profiles(list(ukeys),
-                                               create_missing=True)
-
-            # output events
-            [print_handler.do_event(the_client, sub_id, c_evt) for c_evt in events if c_evt.kind in view_kinds]
-
-        asyncio.create_task(do_events())
-
     def my_connect(the_client: Client):
-        # so on reconnect we don't ask for everthing again
+        # so on reconnect we don't ask for everything again
         use_since = since
-        if the_client.url in since_url:
-            use_since = since_url[the_client.url]
+
+        if last_event_track.get_last_event_dt(the_client):
+            use_since = last_event_track.get_last_event_dt(the_client)
 
         # sub just for keeping profiles upto date
-        the_client.subscribe(handlers=[profile_handler], filters=[
+        the_client.subscribe(handlers=[profile_handler,
+                                       last_event_track],
+                             filters=[
             {
                 'kinds': [Event.KIND_META],
                 'since': util_funcs.date_as_ticks(datetime.now())
             }
         ])
 
-        # sub for what we'll output to screen
-        # TODO: not checked but I think if using inbox you always need to fetch type 4s
-        fetch_kinds = list(view_kinds)
-        if inboxes and Event.KIND_ENCRYPT not in fetch_kinds:
-            fetch_kinds.append(Event.KIND_ENCRYPT)
-        event_filter = get_event_filters(view_profiles=view_profiles,
-                                         since=use_since,
-                                         until=until,
-                                         mention_eids=mention_eids,
-                                         kinds=fetch_kinds,
-                                         pow=pow)
-        the_client.subscribe(handlers=[print_handler], filters=event_filter)
+        # get the event filter with since
+        event_filter = my_get_event_filters(with_since=use_since)
 
-        since_url[the_client.url] = datetime.now()
+        the_client.subscribe(handlers=[print_handler,
+                                       last_event_track],
+                             filters=event_filter)
 
     # actually does the outputting
     if output_json:
@@ -672,8 +704,23 @@ async def main(args):
                                       nip5=nip5)
 
     # we end and reconnect - bit hacky but just makes thing easier to set in action
-    my_client.set_on_eose(my_eose)
+    my_client.set_on_eose(print_handler.do_event)
     my_client.set_on_connect(my_connect)
+
+    # do a single query to get stored events that match, this allows us to sort
+    # it might be slower because we're waiting for all clients to return eose
+    # or atleast fail, but the output is less confusing timewise as before a fast relay
+    # might have returned all its events before another one that only has a few older events
+    # but these would have been the last shown
+    the_events = await my_client.query(filters=my_get_event_filters(with_since=since),
+                                       do_event=last_event_track.do_event)
+
+    await print_handler.ado_event(
+        the_client=None,
+        sub_id=None,
+        evt=the_events)
+
+    print('*** listening for more events ***')
     for c_client in my_client:
         # because we're already connected we'll call manually
         if c_client.connected:
