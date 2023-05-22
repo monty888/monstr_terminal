@@ -475,7 +475,7 @@ def get_event_filters(view_profiles: [Profile],
             watch_keys.append(c_p.public_key)
 
     # watch both from and mention for these keys
-    if watch_keys and nip5 is False:
+    if watch_keys:
         # events from accounts we follow, pow if any, not applied
         ret.append({
             'since': util_funcs.date_as_ticks(since),
@@ -509,7 +509,8 @@ def get_event_filters(view_profiles: [Profile],
                 c_f['until'] = until
             if mention_eids:
                 c_f['#e'] = mention_eids
-            if pow:
+            # pow only applied if we didnt ame authors
+            if pow and 'authors' not in c_f:
                 c_f['ids'] = [''.join(['0'] * (int(pow / 4)))]
 
     # any requested eventids we'll fetch regardless of by who or when
