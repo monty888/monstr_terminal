@@ -482,40 +482,36 @@ def get_event_filters(view_profiles: [Profile],
     if watch_keys:
         # events from accounts we follow, pow if any, not applied
         ret.append({
-            'since': util_funcs.date_as_ticks(since),
-            'kinds': kinds,
             'authors': watch_keys
         })
         # events to/mention accounts we follow, pow if any, applied
-        to_filter = {
-            'since': util_funcs.date_as_ticks(since),
-            'kinds': kinds,
+        ret.append({
             '#p': watch_keys
-        }
-
-        ret.append(to_filter)
+        })
+        if pow:
+            ret.append({})
 
     # more general filter, even with watchkeys we need to use this if nip5
     # because we want events not in are watch keys to test against nip5
     # which can't be done from a filter alone
     else:
-        gen_filter = {
-            'since': util_funcs.date_as_ticks(since),
-            'kinds': kinds
-        }
+        ret.append({})
 
-        ret.append(gen_filter)
+    # add common filter paras to all filters
+    for c_f in ret:
+        # since and kinds always added
+        c_f['since'] = util_funcs.date_as_ticks(since)
+        c_f['kinds'] = kinds
 
-    # if given add until filter to the note/encrypt event filters
-    if until or mention_eids or pow:
-        for c_f in ret:
-            if until:
-                c_f['until'] = until
-            if mention_eids:
-                c_f['#e'] = mention_eids
-            # pow only applied if we didnt ame authors
-            if pow and 'authors' not in c_f:
-                c_f['ids'] = [''.join(['0'] * (int(pow / 4)))]
+        # other fields that may be added
+        if until:
+            c_f['until'] = until
+        if mention_eids:
+            c_f['#e'] = mention_eids
+        # pow added if we didn't specify authors, this include to filter
+        # (pow is applied to events sent/mentioning authors we asked for)
+        if pow and 'authors' not in c_f:
+            c_f['ids'] = [''.join(['0'] * (int(pow / 4)))]
 
     # any requested eventids we'll fetch regardless of by who or when
     if mention_eids:
