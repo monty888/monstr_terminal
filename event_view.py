@@ -1,14 +1,14 @@
 """
 python event_view.py --help
 usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-t TAGS]
-                     [-p {8,12,16,20,24,28,32}] [-n] [-j] [-d]
+                     [-p {8,12,16,20,24,28,32}] [-n] [-o {formatted,json,content}] [-d]
 
 view nostr events from the command line
 
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[DEFAULT]
+                        comma separated nostr relays to connect to, default[None]
   -a AS_USER, --as_user AS_USER
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left encrypted,
                         default[None]
@@ -26,8 +26,10 @@ options:
   -p {8,12,16,20,24,28,32}, --pow {8,12,16,20,24,28,32}
                         minimum amount required for events excluding contacts of as_user default[None]
   -n, --nip5            valid nip5 required for events excluding contacts of as_user
-  -j, --json            output the event in it's raw json format
+  -o {formatted,json,content}, --output {formatted,json,content}
+                        how to display events default[formatted]
   -d, --debug           enable debug output
+
 """
 import logging
 import sys
@@ -53,7 +55,7 @@ from util import ConfigError, load_toml
 # working directory it'll be created it it doesn't exist
 WORK_DIR = f'{Path.home()}/.nostrpy/'
 # relay/s to attach to
-RELAYS = 'ws://localhost:8081'
+RELAYS = None
 # user to view as
 AS_USER = None
 # additional profiles to view other than as_user and anyone they follow
@@ -70,7 +72,8 @@ CONFIG_FILE = f'{WORK_DIR}event_view.toml'
 KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
 # for non contacts event must reach this pow to be output
 POW = None
-
+# how events should be output
+OUTPUT = 'formatted'
 
 def get_profiles_from_keys(keys: str,
                            private_only=False,
@@ -357,9 +360,17 @@ class PrintEventHandler(EventHandler):
 
 
 class JSONPrinter:
-
+    # outputs event in raw format
     async def print_event(self, evt: Event):
         await aioconsole.aprint(evt.event_data())
+
+
+class ContentPrinter:
+    # output just the content of an event
+    async def print_event(self, evt: Event):
+        # extra line put in to help
+        await aioconsole.aprint(''.join(['_'])*80 + '\n')
+        await aioconsole.aprint(evt.content)
 
 
 def get_cmdline_args(args) -> dict:
@@ -411,7 +422,10 @@ def get_cmdline_args(args) -> dict:
 
     parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of as_user',
                         default=args['nip5'])
-    parser.add_argument('-j', '--json', action='store_true', help='output the event in it\'s raw json format', default=args['json'])
+    parser.add_argument('-o', '--output', action='store', choices=['formatted', 'json', 'content'], default=args['output'],
+                        help=f"""
+                                        how to display events
+                                        default[{args['output']}]""")
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
@@ -445,7 +459,7 @@ def get_args() -> dict:
         'nip5': False,
         'tags': None,
         'eid': None,
-        'json': False,
+        'output': OUTPUT,
         'debug': False,
     }
 
@@ -556,7 +570,7 @@ async def main(args):
     until = config['until']
 
     # if this is true then output is just the json as we recieve ot
-    output_json = config['json']
+    output = config['output']
 
     # the event kinds that we subscribe to and output
     view_kinds = config['kinds']
@@ -671,14 +685,16 @@ async def main(args):
                              filters=event_filter)
 
     # actually does the outputting
-    if output_json:
+    if output == 'json':
         my_printer = JSONPrinter()
-    else:
+    elif output == 'formatted':
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
                                            as_user=as_user,
                                            inbox_keys=inbox_keys,
                                            share_keys=share_keys,
                                            show_tags=show_tags)
+    elif output == 'content':
+        my_printer = ContentPrinter()
 
     # event handler for printing events
     print_handler = PrintEventHandler(profile_handler=profile_handler,

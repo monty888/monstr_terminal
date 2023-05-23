@@ -15,14 +15,14 @@ nostr event viewer for the command line.
 ```commandline
 python event_view.py --help
 usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-t TAGS]
-                     [-p {8,12,16,20,24,28,32}] [-n] [-j] [-d]
+                     [-p {8,12,16,20,24,28,32}] [-n] [-o {formatted,json,content}] [-d]
 
 view nostr events from the command line
 
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[DEFAULT]
+                        comma separated nostr relays to connect to, default[None]
   -a AS_USER, --as_user AS_USER
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left encrypted,
                         default[None]
@@ -40,7 +40,8 @@ options:
   -p {8,12,16,20,24,28,32}, --pow {8,12,16,20,24,28,32}
                         minimum amount required for events excluding contacts of as_user default[None]
   -n, --nip5            valid nip5 required for events excluding contacts of as_user
-  -j, --json            output the event in it's raw json format
+  -o {formatted,json,content}, --output {formatted,json,content}
+                        how to display events default[formatted]
   -d, --debug           enable debug output
 ```
 
