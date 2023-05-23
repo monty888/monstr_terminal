@@ -13,17 +13,19 @@ nostr event viewer for the command line.
 
 
 ```commandline
-usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-t TAGS] [-j] [-d]
+python event_view.py --help
+usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-t TAGS]
+                     [-p {8,12,16,20,24,28,32}] [-n] [-j] [-d]
 
 view nostr events from the command line
 
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[relay]
+                        comma separated nostr relays to connect to, default[DEFAULT]
   -a AS_USER, --as_user AS_USER
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left encrypted,
-                        default[user]
+                        default[None]
   --view_profiles VIEW_PROFILES
                         additional comma separated alias, priv_k or pub_k of user to view, default[None]
   -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with wrapped events, default[None]
@@ -35,6 +37,9 @@ options:
   -u UNTIL, --until UNTIL
                         show events n hours after since, default [None]
   -t TAGS, --tags TAGS  comma separated tag types to output, =* for all default[None]
+  -p {8,12,16,20,24,28,32}, --pow {8,12,16,20,24,28,32}
+                        minimum amount required for events excluding contacts of as_user default[None]
+  -n, --nip5            valid nip5 required for events excluding contacts of as_user
   -j, --json            output the event in it's raw json format
   -d, --debug           enable debug output
 ```
