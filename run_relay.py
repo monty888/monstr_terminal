@@ -49,7 +49,8 @@ from pathlib import Path
 from monstr.relay.relay import Relay
 from monstr.relay.accept_handlers import LengthAcceptReqHandler
 from monstr.event.persist import RelayMemoryEventStore, ARelaySQLiteEventStore, RelayPostgresEventStore
-from util import load_toml
+from util import load_toml, ConfigError
+import ssl
 
 # default values when nothing is specified either from cmd line or config file
 HOST = 'localhost'
@@ -66,6 +67,7 @@ PG_PASSWORD = 'password'
 PG_DATABASE = 'nostr-relay'
 MAX_SUB = 10
 MAX_CONTENT_LENGTH = None
+SSL = False
 
 
 def create_work_dir():
@@ -158,7 +160,9 @@ def get_cmdline_args(args) -> dict:
                 see https://github.com/nostr-protocol/nips/blob/master/20.md, default[{not args["nip20"]}]""",
                         default=args['nip20'])
 
-    parser.add_argument('-w', '--wipe', action='store_true', help='wipes event store and exits', default=args['debug'])
+    parser.add_argument('--ssl', action='store_true', help='run ssl ssl_key and ssl_cert will need to be defined',
+                        default=args['ssl'])
+    parser.add_argument('-w', '--wipe', action='store_true', help='wipes event store and exits', default=False)
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
@@ -192,6 +196,9 @@ def get_args() -> dict:
         'nip15': True,
         'nip16': True,
         'nip20': True,
+        'ssl': SSL,
+        'ssl_key': None,
+        'ssl_cert': None,
         'debug': False
     }
 
@@ -221,6 +228,10 @@ def get_args() -> dict:
     if ret['debug']:
         logging.debug(f'get_args:: running with options - {ret}')
 
+    if ret['ssl']:
+        if ret['ssl_key'] is None or ret['ssl_cert'] is None:
+            raise ConfigError('both ssl_key and ssl_cert options must be provide to run as ssl')
+
     return ret
 
 
@@ -241,6 +252,11 @@ async def main(args):
     nip15 = args['nip15']
     nip16 = args['nip16']
     nip20 = args['nip20']
+
+    # ssl options
+    is_ssl = args['ssl']
+    ssl_cert = args['ssl_cert']
+    ssl_key = args['ssl_key']
 
     # get the store type we're using and create
     store = args['store']
@@ -285,10 +301,21 @@ async def main(args):
                      enable_nip15=nip15,
                      ack_events=nip20)
 
-    print(f'running relay at {host}:{port}{end_point} persiting events to store {store}')
+    ssl_context = None
+    protocol = 'ws'
+    if is_ssl:
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(ssl_cert, ssl_key)
+        protocol = 'wss'
+
+
+
+
+    print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
     await my_relay.start(host=host,
                          port=port,
-                         end_point=end_point)
+                         end_point=end_point,
+                         ssl_context=ssl_context)
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.ERROR)
@@ -297,5 +324,8 @@ if __name__ == "__main__":
         sys.exit(0)
 
     signal.signal(signal.SIGINT, sigint_handler)
-    asyncio.run(main(get_args()))
+    try:
+        asyncio.run(main(get_args()))
+    except ConfigError as ce:
+        print(ce)
 

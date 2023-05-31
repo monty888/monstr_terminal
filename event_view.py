@@ -368,8 +368,6 @@ class JSONPrinter:
 class ContentPrinter:
     # output just the content of an event
     async def print_event(self, evt: Event):
-        # extra line put in to help
-        await aioconsole.aprint(''.join(['_'])*80 + '\n')
         await aioconsole.aprint(evt.content)
 
 
@@ -482,8 +480,7 @@ def get_event_filters(view_profiles: [Profile],
                       until: int = None,
                       mention_eids: [str] = None,
                       kinds: [int] = [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                      pow: int = None,
-                      nip5: bool = False):
+                      pow: int = None):
 
     ret = []
     watch_keys = []
@@ -605,8 +602,7 @@ async def main(args):
                                  until=until,
                                  mention_eids=mention_eids,
                                  kinds=fetch_kinds,
-                                 pow=pow,
-                                 nip5=nip5)
+                                 pow=pow)
 
 
     async def print_run_info():
@@ -710,7 +706,6 @@ async def main(args):
                                       nip5=nip5)
 
     # we end and reconnect - bit hacky but just makes thing easier to set in action
-    my_client.set_on_eose(print_handler.do_event)
     my_client.set_on_connect(my_connect)
 
     # do a single query to get stored events that match, this allows us to sort
@@ -728,9 +723,11 @@ async def main(args):
 
     print('*** listening for more events ***')
     for c_client in my_client:
+        my_client.set_on_eose(print_handler.do_event)
         # because we're already connected we'll call manually
         if c_client.connected:
             my_connect(c_client)
+
 
     while True:
         await asyncio.sleep(0.1)
