@@ -424,6 +424,7 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                         how to display events
                                         default[{args['output']}]""")
+    parser.add_argument('--ssl_disable_verify', action='store_true', help='disables checks of ssl certificates')
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
@@ -458,6 +459,7 @@ def get_args() -> dict:
         'tags': None,
         'eid': None,
         'output': OUTPUT,
+        'ssl_disable_verify': None,
         'debug': False,
     }
 
@@ -538,8 +540,13 @@ async def main(args):
     # connect to these relay
     relay = args['relay'].split(',')
 
+    # disable ssl checks
+    ssl = None
+    if args['ssl_disable_verify']:
+        ssl = False
+
     # start and connect relays
-    my_client = ClientPool(relay)
+    my_client = ClientPool(relay, ssl=ssl)
     asyncio.create_task(my_client.run())
     await my_client.wait_connect(timeout=10)
 
