@@ -146,11 +146,14 @@ class PostApp:
 
         return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and self._to_users is None)
 
-    def accept_event(self, event):
+    def accept_event(self,
+                     the_client: Client,
+                     sub_id: str,
+                     evt: Event) -> bool:
         ret = True
         for c_accept in self._acceptors:
             try:
-                ret = c_accept.accept_event(event)
+                ret = c_accept.accept_event(the_client, sub_id, evt)
                 if not ret:
                     break
             except Exception as e:
@@ -158,7 +161,7 @@ class PostApp:
         return ret
 
     def do_event(self, client: Client, sub_id, evt: Event):
-        if self.accept_event(evt):
+        if self.accept_event(client, sub_id, evt):
             # unwrap if evt is shared
             if self._public_inbox:
                 if evt.pub_key == self._public_inbox.public_key:
