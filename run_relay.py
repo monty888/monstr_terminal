@@ -46,10 +46,16 @@ import signal
 import argparse
 from copy import copy
 from pathlib import Path
+import shutil
+try:
+    from stem.control import Controller
+except Exception as e:
+    pass
 from monstr.relay.relay import Relay
 from monstr.relay.accept_handlers import LengthAcceptReqHandler
 from monstr.event.persist import RelayMemoryEventStore, ARelaySQLiteEventStore, RelayPostgresEventStore
-from util import load_toml, ConfigError
+from monstr.util import ConfigError
+from util import load_toml
 import ssl
 
 # default values when nothing is specified either from cmd line or config file
@@ -159,9 +165,10 @@ def get_cmdline_args(args) -> dict:
                         help=f"""disable NIP20 - OK command events  
                 see https://github.com/nostr-protocol/nips/blob/master/20.md, default[{not args["nip20"]}]""",
                         default=args['nip20'])
-
     parser.add_argument('--ssl', action='store_true', help='run ssl ssl_key and ssl_cert will need to be defined',
                         default=args['ssl'])
+    parser.add_argument('--tor', action='store_true', help='make realy accessable over tor',
+                        default=args['tor'])
     parser.add_argument('-w', '--wipe', action='store_true', help='wipes event store and exits', default=False)
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
@@ -199,6 +206,9 @@ def get_args() -> dict:
         'ssl': SSL,
         'ssl_key': None,
         'ssl_cert': None,
+        'tor': False,
+        'tor_password': None,
+        'tor_service_dir': None,
         'debug': False
     }
 
@@ -258,6 +268,15 @@ async def main(args):
     ssl_cert = args['ssl_cert']
     ssl_key = args['ssl_key']
 
+    # tor - can be a bit painful to get working.. mainly I think to do with file permissions
+    # problems include not ouputting onion address because for whatever reason we can read teh file
+    # not stopping cleanly - exceptions
+    # also getting tor to use our own service dir if supplied
+    # currently tor_password, tor_dir can only be set in teh toml file
+    enable_tor = args['tor']
+    tor_password = args['tor_password']
+    tor_dir = args['tor_service_dir']
+
     # get the store type we're using and create
     store = args['store']
     my_store = None
@@ -308,14 +327,122 @@ async def main(args):
         ssl_context.load_cert_chain(ssl_cert, ssl_key)
         protocol = 'wss'
 
+    # access via tor?
+    if enable_tor:
+        with TORService(relay_port=port,
+                        service_dir=tor_dir,
+                        password=tor_password) as my_tor:
+            print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
+            await my_relay.start(host=host,
+                                 port=port,
+                                 end_point=end_point,
+                                 ssl_context=ssl_context)
+    else:
+        print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
+        await my_relay.start(host=host,
+                             port=port,
+                             end_point=end_point,
+                             ssl_context=ssl_context)
 
 
+class TORService:
 
-    print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
-    await my_relay.start(host=host,
-                         port=port,
-                         end_point=end_point,
-                         ssl_context=ssl_context)
+    def __init__(self, relay_port, service_dir=None, password=None):
+        try:
+            if Controller:
+                pass
+        except NameError as ne:
+            raise ConfigError(f'No Controller class - try pip install stem')
+
+        self._relay_port = relay_port
+
+        # if not provided will later use controller to find service dir
+        # though permissions on that dir can be a bit of a pain so maybe best just to provide own
+        self._hidden_service_dir = service_dir
+
+        # password used to auth with controller
+        # best to supply - but without and if tor_browser is running we still might be ok
+        # (don't quite understand the exact way this is working)
+        self._password = password
+
+    def __enter__(self):
+        # this will be default port probably 9051
+        self._controller = Controller.from_port()
+
+        if self._password is None:
+            self._controller.authenticate()
+        else:
+            self._controller.authenticate(password=self._password)
+
+        if self._hidden_service_dir is None:
+            self._hidden_service_dir = os.path.join(self._controller.get_conf('DataDirectory', '/tmp'), 'monstr_relay')
+
+
+        # Create a hidden service where visitors of port 80 get redirected to local
+        # port 5000 (this is where Flask runs by default).
+
+        print(f' * Creating our hidden service in {self._hidden_service_dir}')
+        result = self._controller.create_hidden_service(self._hidden_service_dir, 80, target_port=self._relay_port)
+        if result and result.hostname:
+            print(f" * Our service is available at {result.hostname}, press ctrl+c to quit")
+        else:
+            print(
+                " * Unable to determine our service's hostname, probably due to being unable to read the hidden service directory")
+
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print(" * Shutting down our hidden service")
+        self._controller.close()
+        self._controller.remove_hidden_service(self._hidden_service_dir)
+        shutil.rmtree(self._hidden_service_dir)
+
+
+def run_tor_proxy(relay_port):
+    try:
+        from stem.control import Controller
+    except Exception as e:
+        print(e)
+        print('try pip install stem')
+
+    import os
+    import shutil
+
+    with Controller.from_port() as controller:
+        controller.authenticate()
+
+        # All hidden services have a directory on disk. Lets put ours in tor's data
+        # directory.
+        hidden_service_dir = os.path.join(controller.get_conf('DataDirectory', '/tmp'), 'monstr_relay')
+
+        # Create a hidden service where visitors of port 80 get redirected to local
+        # port 5000 (this is where Flask runs by default).
+
+        print(f' * Creating our hidden service in {hidden_service_dir}')
+        result = controller.create_hidden_service(hidden_service_dir, 80, target_port=relay_port)
+        print(result)
+
+        # The hostname is only available when we can read the hidden service
+        # directory. This requires us to be running with the same user as tor.
+
+        if result.hostname:
+            print(f'Our service is available at {result.hostname}, press ctrl+c to quit')
+        else:
+            print(
+                ' * Unable to determine our service\'s hostname, probably due to being unable to read the hidden service directory')
+
+        # try:
+        #     #bottle.run(port=5000)
+        #
+        # finally:
+        #     # Shut down the hidden service and clean it off disk. Note that you *don't*
+        #     # want to delete the hidden service directory if you'd like to have this
+        #     # same *.onion address in the future.
+        #
+        #     print(" * Shutting down our hidden service")
+        #     controller.remove_hidden_service(hidden_service_dir)
+        #     shutil.rmtree(hidden_service_dir)
+
+
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.ERROR)
