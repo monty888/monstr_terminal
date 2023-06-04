@@ -146,11 +146,9 @@ python alias.py -n monty -k nsec....
 basic relay implementation:
 
 ```commandline
-usage: run_relay.py [-h] [--host HOST] [--port PORT] [--endpoint ENDPOINT]
-                    [-s {sqlite,postgres,transient,none}] [--dbfile DBFILE]
-                    [--pg_database PG_DATABASE] [--pg_user PG_USER]
-                    [--pg_password PG_PASSWORD] [--maxsub MAXSUB]
-                    [--maxlength MAXLENGTH] [--nip15] [--nip16] [--nip20] [-w] [-d]
+usage: run_relay.py [-h] [--host HOST] [--port PORT] [--endpoint ENDPOINT] [-s {sqlite,postgres,transient,none}] [--dbfile DBFILE]
+                    [--pg_database PG_DATABASE] [--pg_user PG_USER] [--pg_password PG_PASSWORD] [--maxsub MAXSUB] [--maxlength MAXLENGTH]
+                    [--nip15] [--nip16] [--nip20] [--ssl] [--tor] [-w] [-d]
 
 runs a nostr relay
 
@@ -161,31 +159,30 @@ options:
   --endpoint ENDPOINT   endpoint address for the relay websocket[/]
   -s {sqlite,postgres,transient,none}, --store {sqlite,postgres,transient,none}
                         storage type to use for received events, default[sqlite]
-  --dbfile DBFILE       when store is sqlite the file location for the db,
-                        default[/{home}/.nostrpy/nostr-relay.db]
+  --dbfile DBFILE       when store is sqlite the file location for the db, default[{home}/.nostrpy/nostr-relay.db]
   --pg_database PG_DATABASE
-                        when store is postgres the postgres db name, default[nostr-
-                        relay]
-  --pg_user PG_USER     when store is postgres the postgres username,
-                        default[postgres]
+                        when store is postgres the postgres db name, default[nostr-relay]
+  --pg_user PG_USER     when store is postgres the postgres username, default[postgres]
   --pg_password PG_PASSWORD
                         when store is postgres the postgres password
   --maxsub MAXSUB       maximum open subs allowed per client websocket, default[10]
   --maxlength MAXLENGTH
                         maximum length for event content if any, default[None]
-  --nip15               disable NIP15 - End Of Stored Events(EOSE) see
-                        https://github.com/nostr-protocol/nips/blob/master/15.md,
-                        default[False]
-  --nip16               disable NIP16 - Event treatment, ephemeral and replaceable
-                        event ranges see https://github.com/nostr-
+  --nip15               disable NIP15 - End Of Stored Events(EOSE) see https://github.com/nostr-protocol/nips/blob/master/15.md, default[False]
+  --nip16               disable NIP16 - Event treatment, ephemeral and replaceable event ranges see https://github.com/nostr-
                         protocol/nips/blob/master/16.md, default[False]
-  --nip20               disable NIP20 - OK command events see
-                        https://github.com/nostr-protocol/nips/blob/master/20.md,
-                        default[False]
+  --nip20               disable NIP20 - OK command events see https://github.com/nostr-protocol/nips/blob/master/20.md, default[False]
+  --ssl                 run ssl ssl_key and ssl_cert will need to be defined
+  --tor                 make realy accessable over tor
   -w, --wipe            wipes event store and exits
   -d, --debug           enable debug output
-
 ```
+The following options can currently only be set in the TOML config file:  
+ssl_key - key file to use when --ssl flag is set  
+ssl_cert - cert file to use when --ssl flag is set  
+tor_password - password to be used when connecting to the Tor controller  
+tor_service_dir - directory where Tor hidden service files will be created
+
 ### examples
 run relay without storing any events
 ```shell
