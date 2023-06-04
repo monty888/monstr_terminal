@@ -177,7 +177,9 @@ options:
   -w, --wipe            wipes event store and exits
   -d, --debug           enable debug output
 ```
-The following options can currently only be set in the TOML config file:  
+The following options can currently only be set in the TOML config file: 
+ 
+
 ssl_key - key file to use when --ssl flag is set  
 ssl_cert - cert file to use when --ssl flag is set  
 tor_password - password to be used when connecting to the Tor controller  
