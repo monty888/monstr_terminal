@@ -323,7 +323,7 @@ async def main(args):
     # access via tor?
     if enable_tor:
         with TORService(relay_port=port,
-                        service_dir=tor_dir,
+                        service_dir=None,
                         password=tor_password) as my_tor:
             print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
             await my_relay.start(host=host,
@@ -388,53 +388,6 @@ class TORService:
         self._controller.close()
         self._controller.remove_hidden_service(self._hidden_service_dir)
         shutil.rmtree(self._hidden_service_dir)
-
-
-def run_tor_proxy(relay_port):
-    try:
-        from stem.control import Controller
-    except Exception as e:
-        print(e)
-        print('try pip install stem')
-
-    import os
-    import shutil
-
-    with Controller.from_port() as controller:
-        controller.authenticate()
-
-        # All hidden services have a directory on disk. Lets put ours in tor's data
-        # directory.
-        hidden_service_dir = os.path.join(controller.get_conf('DataDirectory', '/tmp'), 'monstr_relay')
-
-        # Create a hidden service where visitors of port 80 get redirected to local
-        # port 5000 (this is where Flask runs by default).
-
-        print(f' * Creating our hidden service in {hidden_service_dir}')
-        result = controller.create_hidden_service(hidden_service_dir, 80, target_port=relay_port)
-        print(result)
-
-        # The hostname is only available when we can read the hidden service
-        # directory. This requires us to be running with the same user as tor.
-
-        if result.hostname:
-            print(f'Our service is available at {result.hostname}, press ctrl+c to quit')
-        else:
-            print(
-                ' * Unable to determine our service\'s hostname, probably due to being unable to read the hidden service directory')
-
-        # try:
-        #     #bottle.run(port=5000)
-        #
-        # finally:
-        #     # Shut down the hidden service and clean it off disk. Note that you *don't*
-        #     # want to delete the hidden service directory if you'd like to have this
-        #     # same *.onion address in the future.
-        #
-        #     print(" * Shutting down our hidden service")
-        #     controller.remove_hidden_service(hidden_service_dir)
-        #     shutil.rmtree(hidden_service_dir)
-
 
 
 if __name__ == "__main__":

@@ -68,7 +68,8 @@ class PostApp:
                  to_users: [Profile],
                  public_inbox: Profile = None,
                  subject=None,
-                 is_encrypt=True
+                 is_encrypt=True,
+                 kind=None
                  ):
         """
         :param as_user:     posts made as this user
@@ -91,7 +92,19 @@ class PostApp:
         self._set_public_inbox(public_inbox)
 
         self._subject = subject
+
         self._is_encrypt = is_encrypt
+
+        # default kinds for encrypt/no encrypt
+        if kind is None:
+            if self._is_encrypt:
+                self._kind = 4
+            else:
+                self._kind = 1
+
+        # not, doesn't stop you from encrypting data send e.g. over kind 1 though you probably don't want to do that
+        else:
+            self._kind = kind
 
         # de-duplicating of events for when we're connected to multiple relays
         self._acceptors = [
@@ -168,9 +181,9 @@ class PostApp:
                     evt = PostApp.clust_unwrap_event(evt, self._as_user, self._shared_keys, {
                         self._public_inbox.keys.public_key_hex(): self._public_inbox.keys.private_key_hex()
                     })
-                    if self._is_encrypt and evt.kind != Event.KIND_ENCRYPT:
+                    if self._is_encrypt and evt and evt.kind != Event.KIND_ENCRYPT:
                         evt = None
-                    elif not self._is_encrypt and evt.kind != Event.KIND_TEXT_NOTE:
+                    elif not self._is_encrypt and evt and evt.kind != Event.KIND_TEXT_NOTE:
                         evt = None
                         #
                         #
@@ -217,7 +230,7 @@ class PostApp:
             tags.append(['subject', self._subject])
 
         if not self._is_encrypt:
-            evt = Event(kind=Event.KIND_TEXT_NOTE,
+            evt = Event(kind=self._kind,
                         content=msg,
                         pub_key=self._as_user.public_key,
                         tags=tags)
@@ -232,7 +245,7 @@ class PostApp:
             for c_post in tags:
                 if c_post[0] == 'subject':
                     continue
-                evt = Event(kind=Event.KIND_ENCRYPT,
+                evt = Event(kind=self._kind,
                             content=msg,
                             pub_key=self._as_user.public_key,
                             tags=tags)

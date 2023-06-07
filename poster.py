@@ -1,33 +1,3 @@
-"""
-    usage: poster.py [-h] [-r RELAY] [-a AS_USER] [-t TO_USERS] [-v VIA] [-s SUBJECT] [-p]
-                 [-i] [-l] [-d]
-                 [message ...]
-
-post nostr text(1) and encrypted text(4) events from the command line
-
-positional arguments:
-  message               an integer for the accumulator
-
-options:
-  -h, --help            show this help message and exit
-  -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to,
-                        default[ws://localhost:8081]
-  -a AS_USER, --as_user AS_USER
-                        alias, priv_k of user to post as, default[monty]
-  -t TO_USERS, --to_users TO_USERS
-                        comma seperated alias, priv_k, or pub_k of user to post to,
-                        default[None]
-  -v VIA, --via VIA     alias(with priv_k) or nsec that will be used as public inbox
-                        with wrapped events, default[None]
-  -s SUBJECT, --subject SUBJECT
-                        add subject tag to post,, default[None]
-  -p, --plain_text      post as plain text
-  -i, --ignore_missing  don't fail on missing to_users
-  -l, --loop            stay open to enter and receive messages
-  -d, --debug           enable debug output
-
-"""
 import logging
 import asyncio
 from pathlib import Path
@@ -59,7 +29,8 @@ def show_post_info(as_user: Profile,
                    to_users: [Profile],
                    is_encrypt: bool,
                    subject: str,
-                   public_inbox: Profile):
+                   public_inbox: Profile,
+                   kind):
     if msg is None:
         msg = '<no msg supplied>'
     just = 10
@@ -77,6 +48,9 @@ def show_post_info(as_user: Profile,
     if not is_encrypt:
         enc_text = 'plain_text'
     print('format:'.rjust(just), enc_text)
+    if kind not in {1, 4}:
+        print('kind :'.rjust(just), kind)
+
 
     print('%s\n%s\n%s' % (''.join(['-'] * 10),
                           msg,
@@ -180,7 +154,8 @@ async def get_poster(client: Client,
                      to_users_k: Keys,
                      inbox_k: Keys,
                      is_encrypt: bool,
-                     subject: str):
+                     subject: str,
+                     kind: int):
     k: Keys
 
     # get profiles of from/to if we can
@@ -218,7 +193,8 @@ async def get_poster(client: Client,
                        to_users=to_users_p,
                        public_inbox=inbox_p,
                        subject=subject,
-                       is_encrypt=is_encrypt)
+                       is_encrypt=is_encrypt,
+                       kind=kind)
     return {
         'post_app': post_app,
         'user': user_p,
@@ -233,7 +209,8 @@ async def post_single(relays: [str],
                       inbox_k: Keys,
                       is_encrypt: bool,
                       subject: str,
-                      message: str):
+                      message: str,
+                      kind: int = None):
 
     async with ClientPool(relays, timeout=10) as client:
         post_env = await get_poster(client=client,
@@ -241,7 +218,8 @@ async def post_single(relays: [str],
                                     to_users_k=to_users_k,
                                     inbox_k=inbox_k,
                                     is_encrypt=is_encrypt,
-                                    subject=subject)
+                                    subject=subject,
+                                    kind=kind)
 
         post_app: PostApp = post_env['post_app']
         user: Profile = post_env['user']
@@ -253,7 +231,8 @@ async def post_single(relays: [str],
                        is_encrypt=is_encrypt,
                        subject=subject,
                        public_inbox=inboxes,
-                       msg=message)
+                       msg=message,
+                       kind=kind)
 
         post_app.do_post(msg=message)
         # hack to give time for the event to be sent
@@ -265,22 +244,27 @@ async def post_loop(relays: [str],
                     to_users_k: Keys,
                     inbox_k: Keys,
                     is_encrypt: bool,
-                    subject: str):
+                    subject: str,
+                    kind: int,
+                    encrypted_kinds: set):
 
     sub_id: str = None
     con_status = None
 
-    kinds = Event.KIND_ENCRYPT
     # if we're using an inbox then events are always encrypted type 4
     # though they may be unencrypted to anyone who has the inbox keys
-    if is_encrypt is False and not inbox_k:
-        kinds = Event.KIND_TEXT_NOTE
+
 
     def do_sub():
         nonlocal sub_id
 
+        # if inbox then we're always looking for kind4, the actually events we want are wrapped inside that
+        f_kind = kind
+        if inbox_k:
+            f_kind = Event.KIND_ENCRYPT
+
         filter = {
-            'kinds': [kinds],
+            'kinds': [f_kind],
             'limit': 10
         }
         if inbox_k:
@@ -326,11 +310,13 @@ async def post_loop(relays: [str],
                                     to_users_k=to_users_k,
                                     inbox_k=inbox_k,
                                     is_encrypt=is_encrypt,
-                                    subject=subject)
+                                    subject=subject,
+                                    kind=kind)
 
         post_app: PostApp = post_env['post_app']
         my_gui = PostAppGui(post_app,
-                            profile_handler=peh)
+                            profile_handler=peh,
+                            encrypted_kinds=encrypted_kinds)
 
         my_client.set_on_status(on_status)
         my_client.set_on_eose(on_eose)
@@ -369,8 +355,17 @@ def get_cmdline_args(args) -> dict:
 
     parser.add_argument('message', type=str, nargs='*',
                        help='an integer for the accumulator')
-    parser.add_argument('-p', '--plain_text', action='store_false', help='post as plain text',
-                        dest='encrypt')
+    parser.add_argument('-k', '--kind', action='store', help='kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is True', type=int,
+                        dest='kind')
+    parser.add_argument('-f', '--format', action='store', help="""
+    format of the event content if default is selected then events of kind 4 will be encrypted and all other kinds will 
+    be plaintext
+    """, choices={
+        'plaintext',
+        'encrypt',
+        'default'
+    }, default='default')
+
 
     parser.add_argument('-i', '--ignore_missing', action='store_true', help='don\'t fail on missing to_users')
     parser.add_argument('-l', '--loop', action='store_true', help='stay open to enter and receive messages')
@@ -396,7 +391,8 @@ def get_args() -> dict:
         'as_user': None,
         'to_users': None,
         'via': None,
-        'encrypt': True,
+        'format': 'default',
+        'kind': None,
         'ignore_missing': False,
         'subject': None,
         'message': None,
@@ -446,8 +442,34 @@ async def main(args):
     # subject text for message/ each message
     subject = args['subject']
 
-    # encryped kind 4 events
-    is_encrypt = args['encrypt']
+    # to encrypt event content or not
+    format = args['format']
+    is_encrypt = format == 'encrypt'
+
+    # kind of event to post by default this will be 1 for plaintxt or 4 for encrypt
+    kind = args['kind']
+    # events to be treated as encrypted, none means default 4
+    encrypted_kinds = None
+
+    # no kind given we'll choice base on format
+    if kind is None:
+        if format in {'encrypt', 'default'}:
+            is_encrypt = True
+            kind = 4
+        else:
+            kind = 1
+
+    # a kind has been given, if format is default then selected based on kind
+    else:
+        if format == 'default':
+            is_encrypt = kind in {
+                4
+            }
+
+    if is_encrypt:
+        encrypted_kinds = {
+            kind
+        }
 
     # file used to lookup aliases
     alias_file = args['alias_file']
@@ -479,7 +501,8 @@ async def main(args):
                               inbox_k=inbox_keys,
                               is_encrypt=is_encrypt,
                               subject=subject,
-                              message=message
+                              message=message,
+                              kind=kind
                               )
         else:
             await post_loop(relays=relays,
@@ -487,7 +510,9 @@ async def main(args):
                             to_users_k=to_keys,
                             inbox_k=inbox_keys,
                             is_encrypt=is_encrypt,
-                            subject=subject
+                            subject=subject,
+                            kind=kind,
+                            encrypted_kinds=encrypted_kinds
                             )
 
     except ConfigError as ce:
@@ -498,7 +523,7 @@ if __name__ == "__main__":
     logging.getLogger().setLevel(logging.FATAL)
     util_funcs.create_work_dir(WORK_DIR)
     asyncio.run(main(get_args()))
-    # print(get_args())
+
 
 
 

@@ -1,36 +1,3 @@
-"""
-python event_view.py --help
-usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [-t TAGS]
-                     [-p {8,12,16,20,24,28,32}] [-n] [-o {formatted,json,content}] [-d]
-
-view nostr events from the command line
-
-options:
-  -h, --help            show this help message and exit
-  -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[None]
-  -a AS_USER, --as_user AS_USER
-                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left encrypted,
-                        default[None]
-  --view_profiles VIEW_PROFILES
-                        additional comma separated alias, priv_k or pub_k of user to view, default[None]
-  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with wrapped events, default[None]
-  -i EID, --id EID      comma separated event ids will be added as e tag filter e.g with kind=42 can be used to view a chat channel, default[None]
-  -k KINDS, --kinds KINDS
-                        comma separated event kinds to output, default[1,4]
-  -s SINCE, --since SINCE
-                        show events n hours previous to running, default [6]
-  -u UNTIL, --until UNTIL
-                        show events n hours after since, default [None]
-  -t TAGS, --tags TAGS  comma separated tag types to output, =* for all default[None]
-  -p {8,12,16,20,24,28,32}, --pow {8,12,16,20,24,28,32}
-                        minimum amount required for events excluding contacts of as_user default[None]
-  -n, --nip5            valid nip5 required for events excluding contacts of as_user
-  -o {formatted,json,content}, --output {formatted,json,content}
-                        how to display events default[formatted]
-  -d, --debug           enable debug output
-
-"""
 import logging
 import sys
 import signal
@@ -142,6 +109,8 @@ async def get_from_config(config,
 
         if not as_user:
             raise ConfigError(f'unable to find/create as_user profile - {config["as_user"]}')
+
+        all_view.append(as_user)
 
         c_c: Contact
         await profile_handler.load_contacts(as_user)
@@ -294,13 +263,14 @@ class PrintEventHandler(EventHandler):
                  profile_handler: ProfileEventHandlerInterface = None,
                  printer=None,
                  classifier=None,
+                 nip5helper:NIP5Helper = None,
                  nip5=False,
                  pow=False):
 
         self._profile_handler = profile_handler
         self._printer = printer
         self._classifier: MyClassifier = classifier
-        self._nip_checker = NIP5Helper()
+        self._nip_checker: NIP5Helper = nip5helper
         self._pow = pow
         self._nip5 = nip5
         super().__init__(event_acceptors)
@@ -407,6 +377,10 @@ def get_cmdline_args(args) -> dict:
                         help=f'show events n hours previous to running, default [{args["since"]}]')
     parser.add_argument('-u', '--until', action='store', default=args['until'], type=int,
                         help=f'show events n hours after since, default [{args["until"]}]')
+    parser.add_argument('--pubkey', action='store_true', default=args['pubkey'],
+                        help=f"""
+                                        output event author pubkey
+                                        default[{args['pubkey']}]""")
     parser.add_argument('-t', '--tags', action='store', default=args['tags'],
                         help=f"""
                                     comma separated tag types to output, =* for all
@@ -418,6 +392,12 @@ def get_cmdline_args(args) -> dict:
                                         minimum amount required for events excluding contacts of as_user
                                         default[{args['pow']}]""")
 
+    parser.add_argument('-e', '--entities', action='store_true',
+                        help='output event_id and pubkeys as nostr entities',
+                        default=args['nip5'])
+    parser.add_argument('--nip5check', action='store_true',
+                        help='nip5 checked and displayed green if good',
+                        default=args['nip5'])
     parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of as_user',
                         default=args['nip5'])
     parser.add_argument('-o', '--output', action='store', choices=['formatted', 'json', 'content'], default=args['output'],
@@ -456,10 +436,13 @@ def get_args() -> dict:
         'kinds': KINDS,
         'pow': POW,
         'nip5': False,
+        'nip5check': False,
+        'pubkey': False,
         'tags': None,
         'eid': None,
         'output': OUTPUT,
         'ssl_disable_verify': None,
+        'entities': False,
         'debug': False,
     }
 
@@ -487,6 +470,7 @@ def get_event_filters(view_profiles: [Profile],
     ret = []
     watch_keys = []
     c_p: Profile
+
     if view_profiles:
         for c_p in view_profiles:
             watch_keys.append(c_p.public_key)
@@ -585,12 +569,23 @@ async def main(args):
     # nip5 required for events from any accounts we didn't request
     # if both pow and nip5 are requested then both needed for those events to be output
     nip5 = config['nip5']
+    nip5check = config['nip5check']
+
+    # used if we are spam checking with nip5 or if we are verifying nip5s for display
+    nip5helper = NIP5Helper()
+
 
     # only view events that mention this event
     mention_eids = config['eid']
 
+    # actually show event author pubkey
+    show_pubkey = config['pubkey']
+
     # output these event tags
     show_tags = config['tags']
+
+    # output the event id and pubkey as note or npub style
+    entities = config['entities']
 
     # keep track of last events seen so we can reconnect without getting same events again
     last_event_track = LastEventHandler()
@@ -610,7 +605,6 @@ async def main(args):
                                  mention_eids=mention_eids,
                                  kinds=fetch_kinds,
                                  pow=pow)
-
 
     async def print_run_info():
         c_p: Profile
@@ -691,11 +685,19 @@ async def main(args):
     if output == 'json':
         my_printer = JSONPrinter()
     elif output == 'formatted':
+        # by default we won't valid the nip5s for display
+        fnip_check = None
+        if nip5check:
+            fnip_check = nip5helper
+
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
                                            as_user=as_user,
                                            inbox_keys=inbox_keys,
                                            share_keys=share_keys,
-                                           show_tags=show_tags)
+                                           show_pub_key=show_pubkey,
+                                           show_tags=show_tags,
+                                           entities=entities,
+                                           nip5helper=fnip_check)
     elif output == 'content':
         my_printer = ContentPrinter()
 
@@ -709,6 +711,7 @@ async def main(args):
                                                               as_user=as_user,
                                                               view_profiles=view_profiles,
                                                               public_inboxes=inboxes),
+                                      nip5helper=nip5helper,
                                       pow=pow is not None,
                                       nip5=nip5)
 

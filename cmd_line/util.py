@@ -1,15 +1,12 @@
-from __future__ import annotations
-from typing import TYPE_CHECKING
-# if TYPE_CHECKING:
-#     from nostr.ident.profile import
-
+from prompt_toolkit import print_formatted_text
+from prompt_toolkit.formatted_text import FormattedText
 from monstr.event.event import Event
 from monstr.encrypt import Keys
 from app.post import PostApp
-from monstr.ident.profile import ProfileList, Profile
+from monstr.ident.profile import Profile, NIP5Helper
 from monstr.ident.event_handlers import ProfileEventHandler
-from prompt_toolkit import print_formatted_text
-from prompt_toolkit.formatted_text import FormattedText
+from monstr.entities import Entities
+from monstr.util import util_funcs
 
 
 class EventPrinter:
@@ -100,7 +97,11 @@ class FormattedEventPrinter:
                  as_user: Profile = None,
                  inbox_keys: [Keys] =None,
                  share_keys=None,
-                 show_tags: [str] = None):
+                 show_pub_key: bool = False,
+                 show_tags: [str] = None,
+                 entities: bool = False,
+                 nip5helper: NIP5Helper = None,
+                 encrypted_kinds=None):
 
         self._profile_handler = profile_handler
         self._as_user = as_user
@@ -119,47 +120,123 @@ class FormattedEventPrinter:
         if share_keys is None:
             self._share_keys = {}
 
-        self._as_user_color = 'green'
-        self._other_user_key = 'green'
-        self._full_keys = False
+        # styles for colouring user output
+        # us
+        self._as_user_style = 'bold ForestGreen'
+        # someone we follow
+        self._as_user_contact_style = 'ForestGreen'
+        # anyone else
+        self._as_user_non_contact_style = 'FireBrick bold'
 
+
+
+        # output npub, note instead of hex for event_id and pks
+        self._entities = entities
+
+        # at end show pubkey
+        self._show_pub_key = show_pub_key
         # output these tags or all if ['*']
         self._show_tags = show_tags
         if self._show_tags:
             self._show_tags = set(self._show_tags)
 
+        # if supplied then any nip5s will be checked and colored green if good
+        self._nip5helper = nip5helper
+        # styles used when checking nip5s
+        self._nip5_valid_style = 'ForestGreen'
+        self._nip5_invalid_style = 'FireBrick bold'
+
+        # events that we expect to be encrypted
+        self._encrypted_kinds = encrypted_kinds
+        if self._encrypted_kinds is None:
+            self._encrypted_kinds = {Event.KIND_ENCRYPT}
+
     async def print_event(self, evt: Event):
-        await self.print_event_header(evt)
-        await self.print_event_content(evt)
-        await self.print_event_footer(evt)
+        print_formatted_text(FormattedText(await self.get_event_header(evt)))
+        print_formatted_text(FormattedText(await self.get_event_content(evt)))
+        print_formatted_text(FormattedText(await self.get_event_footer(evt)))
 
     async def _get_profile(self, key) -> Profile:
         # will error if key is not valid, doesn't break anything for us but maybe we should fix?
-        ret=  (await self._profile_handler.get_profiles(pub_ks=key,
+        ret = (await self._profile_handler.get_profiles(pub_ks=key,
                                                         create_missing=True))[0]
         return ret
 
     def _is_user(self, key):
         return self._as_user is not None and self._as_user.public_key == key
 
-    async def print_event_header(self,
-                           evt: Event,
-                           depth=0):
+    async def _is_contact(self, key):
+        ret = False
+        if self._as_user is not None:
+            if not self._as_user.contacts_is_set():
+                await self._profile_handler.load_contacts(self._as_user)
+            ret = key in self._as_user.contacts.follow_keys()
+
+        return ret
+
+    async def _get_pub_k_style(self, pub_k):
+        ret = ''
+        # no styling if no as_user
+        if self._as_user:
+            if self._is_user(pub_k):
+                ret = self._as_user_style
+            elif await self._is_contact(pub_k):
+                ret = self._as_user_contact_style
+            else:
+                ret = self._as_user_non_contact_style
+
+        return ret
+
+    async def get_event_header(self,
+                                     evt: Event,
+                                     depth=0) -> []:
         p: Profile
 
         txt_arr = []
         depth_align = ''.join(['\t'] * depth)
         txt_arr.append(('', '\n%s--- ' % depth_align))
         create_p = await self._get_profile(evt.pub_key)
-        style = 'FireBrick bold'
-        if self._is_user(evt.pub_key):
-            style = 'green bold'
 
-        txt_arr.append((style, create_p.display_name()))
-        if self._full_keys and create_p.name and not create_p.profile_name:
-            txt_arr.append(('', '[%s]' % create_p.public_key))
+        style = await self._get_pub_k_style(evt.pub_key)
 
-        txt_arr.append(('',' ---'))
+        name = create_p.name
+        nip05 = create_p.get_attr("nip05")
+        nip05_name = None
+        nip05_domain = None
+        name_nip05match = False
+
+        if nip05:
+            nip05_split = nip05.split('@')
+            if len(nip05) > 1:
+                nip05_name = nip05_split[0]
+                nip05_domain = nip05_split[1]
+                if name is None and nip05_domain:
+                    name = nip05_name
+                name_nip05match = name.lower() == nip05_name.lower() or nip05_name == '_'
+
+        if name is None or name.replace(' ', '') == '':
+            name = util_funcs.str_tails(create_p.public_key)
+
+        txt_arr.append((style, name))
+
+
+        # nip5 ifo if any
+        nip05 = create_p.get_attr("nip05")
+        if nip05:
+            nip5_style = ''
+
+            if self._nip5helper:
+                nip5_style = self._nip5_invalid_style
+                if self._nip5helper.check_nip5(nip05, create_p.public_key):
+                    nip5_style = self._nip5_valid_style
+
+            if name_nip05match:
+                txt_arr.append((nip5_style, f'@{nip05_domain}'))
+            else:
+                txt_arr.append((nip5_style, f' ({nip05})'))
+
+
+        txt_arr.append(('', ' ---'))
 
         to_list = []
         sep = False
@@ -170,19 +247,13 @@ class FormattedEventPrinter:
                                                  create_missing=True)
 
         for c_pk in evt.p_tags:
-            style = ''
-            if self._is_user(c_pk):
-                style = 'bold ForestGreen'
+            style = await self._get_pub_k_style(c_pk)
+
             to_p = await self._get_profile(c_pk)
             if sep:
                 to_list.append(('', ', '))
 
-            if not self._full_keys:
-                to_list.append((style, to_p.display_name()))
-            else:
-                if to_p.name or to_p.profile_name:
-                    to_list.append((style, to_p.display_name()))
-                to_list.append(('', '[%s]' % to_p.public_key))
+            to_list.append((style, to_p.display_name()))
 
             sep = True
 
@@ -195,17 +266,14 @@ class FormattedEventPrinter:
             txt_arr.append(('', '\n%s' % depth_align))
             txt_arr.append(('', '[subject - %s]' % ','.join(subject_tags)))
 
-        # hash_tags = evt.get_tags_value('t') + evt.get_tags_value('hashtag')
-        # if hash_tags:
-        #     txt_arr.append(('', '\n%s' % depth_align))
-        #     txt_arr.append(('', '[hashtags - %s]' % ','.join(hash_tags)))
 
-        # if to_list:
-        #     ret_arr.append('%s-> %s' % (depth_align, to_list))
-        #
-        # ret_arr.append('%s%s@%s' % (depth_align, evt.id, evt.created_at))
         txt_arr.append(('','\n%s' % depth_align))
-        txt_arr.append(('cyan', evt.id))
+
+        id = evt.id
+        if self._entities:
+            id = Entities.encode('note', id)
+
+        txt_arr.append(('cyan', id))
         txt_arr.append(('','@'))
         txt_arr.append(('', '%s' % evt.created_at))
 
@@ -213,23 +281,61 @@ class FormattedEventPrinter:
         if evt.kind == Event.KIND_CHANNEL_MESSAGE and evt.e_tags:
             txt_arr.append(('', f'\nchannel: {evt.e_tags[0]}'))
 
-        print_formatted_text(FormattedText(txt_arr))
+        return txt_arr
 
-    async def print_event_footer(self,
-                           evt: Event,
-                           depth=0):
+    async def get_event_footer(self,
+                               evt: Event,
+                               depth=0):
+
+        txt_arr = []
+        depth_align = ''.join(['\t'] * depth)
+
+        if self._show_pub_key:
+            txt_arr.append(('', f'\n{depth_align}'))
+            txt_arr.append(('cyan', '-pubkey-\n'))
+            out_pk = evt.pub_key
+            if self._entities:
+                out_pk = Entities.encode('npub', out_pk)
+            txt_arr.append(('', depth_align))
+            txt_arr.append((await self._get_pub_k_style(evt.pub_key), f'{out_pk}'))
 
         if self._show_tags:
-            txt_arr = []
-            depth_align = ''.join(['\t'] * depth)
-
             all_tag_names = {c_tag[0] for c_tag in evt.tags}
             for c_tag_name in all_tag_names:
+                txt_arr.append(('', f'\n{depth_align}'))
+                txt_arr.append(('cyan', '-tags-'))
                 if '*' in self._show_tags or c_tag_name in self._show_tags:
-                    txt_arr.append(('', f'#{c_tag_name}\n'))
+
                     for c_tag_v in evt.get_tags(c_tag_name):
-                        txt_arr.append(('', f'{c_tag_v}\n'))
-            print_formatted_text(FormattedText(txt_arr))
+                        v_style = ''
+                        if c_tag_name == 'p':
+                            v_style = await self._get_pub_k_style(c_tag_v[0])
+
+                        txt_arr.append(('cyan', f'\n{depth_align}{c_tag_name}'))
+                        txt_arr.append(('', f'\n{depth_align}['))
+                        sep = ''
+                        for i, item in enumerate(c_tag_v):
+                            item_val = item
+                            if self._entities:
+                                try:
+                                    if c_tag_name == 'p':
+                                        item_val = Entities.encode('npub', item_val)
+                                    elif c_tag_name == 'e':
+                                        item_val = Entities.encode('note', item_val)
+
+                                # invalid data prob?
+                                except Exception as e:
+                                    pass
+                            if c_tag_name == 'p' and i == 0:
+                                txt_arr.append((v_style, f'{item_val}'))
+                            else:
+                                txt_arr.append(('', f'{sep}{item_val}'))
+                            sep = ','
+
+                        txt_arr.append(('', ']\n'))
+
+        # actualy do the output if any
+        return txt_arr
 
     async def highlight_tags(self, content: str, p_tags: [], default_style=''):
         replacements = {}
@@ -253,9 +359,7 @@ class FormattedEventPrinter:
 
         return ret
 
-    async def _get_decode_event_content(self, evt):
-        could_decode = False
-        content = evt.content
+    async def get_event_content(self, evt):
 
         def nip_decode(the_evt: Event):
             pub_key = the_evt.p_tags[0]
@@ -263,49 +367,62 @@ class FormattedEventPrinter:
                 pub_key = the_evt.pub_key
             return the_evt.decrypted_content(self._as_user.private_key, pub_key)
 
-        if evt.kind == Event.KIND_TEXT_NOTE:
-            could_decode = True
-        elif evt.kind == Event.KIND_ENCRYPT:
+        txt_arr = []
+
+        # by default this is just kind4, but for example you could give an empheral kind then you have empheral
+        # encrypted events, obvs as much as you trusty that the relay is doing as it say...
+        if evt.kind in self._encrypted_kinds:
             try:
                 # basic NIP4 encrypted event from/to us
                 if self._as_user and \
                         (evt.pub_key == self._as_user.public_key or
                          self._as_user.public_key in evt.p_tags):
-                    content = nip_decode(evt)
-                    could_decode = True
+                    txt_arr.append(('', nip_decode(evt)))
                 # clust style wrapped NIP4 event
                 elif evt.pub_key in self._inbox_view_keys:
                     inbox_p: Profile = await self._get_profile(key=evt.pub_key)
                     unwrapped_evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys, self._inbox_decode_map)
                     if unwrapped_evt:
-                        # printing here is confusing, should just be decoding...
-
+                        # get content from unwrapped event and output inbox info
                         if unwrapped_evt.kind == Event.KIND_ENCRYPT:
-                            print('\tencrypted evt in inbox(%s)-->' % inbox_p.display_name())
-                            await self.print_event_header(unwrapped_evt, depth=1)
-                            content = '\t' + nip_decode(unwrapped_evt)
+                            txt_arr.append(('', f'\tencrypted evt in inbox({inbox_p.display_name()})-->'))
+                            content = nip_decode(unwrapped_evt)
                         else:
-                            print('\tplaintext evt in inbox(%s)-->' % inbox_p.display_name())
-                            await self.print_event_header(unwrapped_evt, depth=1)
-                            content = '\t' + unwrapped_evt.content
-                        could_decode = True
+                            txt_arr.append(('', '\tplaintext evt in inbox(%s)-->' % inbox_p.display_name()))
+                            content = unwrapped_evt.content
+
+                        # output unwrapped event
+                        txt_arr += await self.get_event_header(unwrapped_evt, depth=1)
+                        txt_arr += [('', '\n\t' + content)]
+                        txt_arr += await self.get_event_footer(unwrapped_evt, depth=1)
+
                     else:
-                        print('\tencrypted evt in - inbox(%s) unable to decode-->' % inbox_p.display_name())
-                        content = '\t' + content
+                        # event inbox that we should be able to decrypt but...
+                        txt_arr.append(('', f'\tunable to decrypt evt in inbox({inbox_p.display_name()})-->'))
+                        txt_arr.append(('gray', evt.content))
 
-            except:
-                pass
+                # encrypted event that we don't have the info to decrypt
+                else:
+                    txt_arr.append(('gray', evt.content))
 
-        return content, could_decode
+            # any exception just output raw content
+            except Exception as e:
+                txt_arr.append(('gray', evt.content))
 
-    async def print_event_content(self, evt: Event):
-        style = ''
-        content, could_decode = await self._get_decode_event_content(evt)
-        if not could_decode:
-            style = 'gray'
+        # anything other that encrypted just treated as text
+        else:
+            txt_arr.append(('', evt.content))
 
-        print_formatted_text(FormattedText(await self.highlight_tags(content=content,
-                                                                     p_tags=evt.p_tags,
-                                                                     default_style=style)))
+        return txt_arr
+
+    # async def print_event_content(self, evt: Event):
+    #     style = ''
+    #     content, could_decode = await self._get_decode_event_content(evt)
+    #     if not could_decode:
+    #         style = 'gray'
+    #
+    #     print_formatted_text(FormattedText(await self.highlight_tags(content=content,
+    #                                                                  p_tags=evt.p_tags,
+    #                                                                  default_style=style)))
 
 
