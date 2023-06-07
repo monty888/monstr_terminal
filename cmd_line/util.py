@@ -207,7 +207,7 @@ class FormattedEventPrinter:
 
         if nip05:
             nip05_split = nip05.split('@')
-            if len(nip05) > 1:
+            if len(nip05_split) > 1:
                 nip05_name = nip05_split[0]
                 nip05_domain = nip05_split[1]
                 if name is None and nip05_domain:
@@ -227,7 +227,7 @@ class FormattedEventPrinter:
 
             if self._nip5helper:
                 nip5_style = self._nip5_invalid_style
-                if self._nip5helper.check_nip5(nip05, create_p.public_key):
+                if await self._nip5helper.check_nip5(nip05, create_p.public_key):
                     nip5_style = self._nip5_valid_style
 
             if name_nip05match:
