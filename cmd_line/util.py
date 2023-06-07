@@ -3,7 +3,7 @@ from prompt_toolkit.formatted_text import FormattedText
 from monstr.event.event import Event
 from monstr.encrypt import Keys
 from app.post import PostApp
-from monstr.ident.profile import Profile, NIP5Helper
+from monstr.ident.profile import Profile, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import ProfileEventHandler
 from monstr.entities import Entities
 from monstr.util import util_funcs
@@ -227,8 +227,11 @@ class FormattedEventPrinter:
 
             if self._nip5helper:
                 nip5_style = self._nip5_invalid_style
-                if await self._nip5helper.check_nip5(nip05, create_p.public_key):
-                    nip5_style = self._nip5_valid_style
+                try:
+                    if await self._nip5helper.is_valid(nip05, create_p.public_key):
+                        nip5_style = self._nip5_valid_style
+                except NIP5Error as ne:
+                    pass
 
             if name_nip05match:
                 txt_arr.append((nip5_style, f'@{nip05_domain}'))

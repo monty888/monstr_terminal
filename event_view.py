@@ -42,6 +42,7 @@ POW = None
 # how events should be output
 OUTPUT = 'formatted'
 
+
 def get_profiles_from_keys(keys: str,
                            private_only=False,
                            single_only=False,
@@ -573,7 +574,6 @@ async def main(args):
 
     # used if we are spam checking with nip5 or if we are verifying nip5s for display
     nip5helper = NIP5Helper()
-
 
     # only view events that mention this event
     mention_eids = config['eid']
