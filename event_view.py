@@ -26,6 +26,10 @@ WORK_DIR = f'{Path.home()}/.nostrpy/'
 RELAYS = None
 # user to view as
 AS_USER = None
+# if as user fetch contacts and add them to the view
+VIEW_CONTACTS = True
+# if query with author keys if we are looking for events sent from, sent to, or from and to those keys
+DIRECTION = 'both'
 # additional profiles to view other than as_user and anyone they follow
 VIEW_EXTRA = None
 # look in these 'inboxes' also
@@ -104,6 +108,7 @@ async def get_from_config(config,
     inbox_keys = []
     shared_keys = []
     tags = config['tags']
+    contacts = config['contacts']
 
     # TODO allow the alias file to be changed
     alias_file = '%sprofiles.csv' % WORK_DIR
@@ -127,14 +132,16 @@ async def get_from_config(config,
 
         all_view.append(as_user)
 
-        c_c: Contact
-        await profile_handler.load_contacts(as_user)
-        contacts = as_user.contacts
+        # lookup and add contacts to view?
         if contacts:
-            contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
-                                                            create_missing=True)
+            c_c: Contact
+            await profile_handler.load_contacts(as_user)
+            contacts = as_user.contacts
+            if contacts:
+                contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
+                                                                create_missing=True)
 
-            all_view = all_view + contact_ps.profiles
+                all_view = all_view + contact_ps.profiles
 
     # addtional profiles to view other than current profile
     if config['view_profiles']:
@@ -167,22 +174,6 @@ async def get_from_config(config,
 
     if as_user is not None and as_user.private_key:
         shared_keys = PostApp.get_clust_shared_keymap_for_profile(as_user, all_view)
-
-
-
-    # try:
-    #     since = int(config['since'])
-    # except ValueError as e:
-    #     raise ConfigError('since - %s not a numeric value' % config['since'])
-    #
-    # # extract
-    # until = config['until']
-    # try:
-    #     if config['until'] is not None:
-    #         until = int(config['until'])
-    # except ValueError as e:
-    #     raise ConfigError(f'until - {config["until"]} not a numeric value')
-
 
     # kind of events that'll we output
     try:
@@ -222,12 +213,14 @@ async def get_from_config(config,
 class MyClassifier:
 
     def __init__(self,
-                 event_ids: [str] = None,
-                 as_user: Profile = None,
-                 view_profiles: [Profile] = None,
-                 public_inboxes: [Profile] = None):
+                 event_ids: [str],
+                 as_user: Profile,
+                 view_contacts: bool,
+                 view_profiles: [Profile],
+                 public_inboxes: [Profile]):
 
         self._as_user = as_user
+        self._view_contacts = view_contacts
         self._view_profiles = view_profiles
         self._inboxes = public_inboxes
         self._view_keys = []
@@ -244,7 +237,8 @@ class MyClassifier:
 
         if self._as_user is not None:
             self._view_keys.append(self._as_user.public_key)
-            self._view_keys = self._view_keys + [c_c.contact_public_key for c_c in self._as_user.contacts]
+            if self._view_contacts:
+                self._view_keys = self._view_keys + [c_c.contact_public_key for c_c in self._as_user.contacts]
 
         if self._view_profiles is not None:
             self._view_keys = self._view_keys + [c_p.public_key for c_p in self._view_profiles]
@@ -373,6 +367,12 @@ def get_cmdline_args(args) -> dict:
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                         encrypted events will be left encrypted, 
                         default[{args['as_user']}]""")
+    parser.add_argument('--contacts', action='store_true',
+                        help='if as_user lookup contacts and add to view',
+                        default=args['contacts'])
+    parser.add_argument('--no-contacts', action='store_false',
+                        help='if as user DO NOT add contacts to view',
+                        default=args['contacts'], dest='contacts')
     parser.add_argument('--view_profiles', action='store', default=args['view_extra'],
                         help=f"""
                             additional comma separated alias, priv_k or pub_k of user to view,
@@ -382,6 +382,10 @@ def get_cmdline_args(args) -> dict:
                             additional comma separated alias(with priv_k) or priv_k that will be used 
                             as public inbox with wrapped events,
                             default[{args['via']}]""")
+    parser.add_argument('--direction', action='store', default=args['direction'],choices={'from', 'to', 'both'},
+                        help=f"""
+                                if query with author keys if we are looking for events sent from, sent to or both with those keys
+                                default[{args['direction']}]""")
     parser.add_argument('-i', '--id', action='store', default=args['eid'], dest='eid',
                         help=f"""
                                     comma separated event ids will be added as e tag filter e.g with kind=42 
@@ -449,8 +453,10 @@ def get_args() -> dict:
     ret = {
         'relay': RELAYS,
         'as_user': AS_USER,
+        'contacts': VIEW_CONTACTS,
         'view_extra': VIEW_EXTRA,
         'via': INBOXES,
+        'direction': DIRECTION,
         'limit': LIMIT,
         'since': SINCE,
         'until': UNTIL,
@@ -487,7 +493,9 @@ def get_event_filters(view_profiles: [Profile],
                       limit: int,
                       mention_eids: [str],
                       kinds: [int],
-                      pow: int):
+                      pow: int,
+                      nip5: bool,
+                      direction: str):
 
     ret = []
     watch_keys = []
@@ -500,19 +508,24 @@ def get_event_filters(view_profiles: [Profile],
     # watch both from and mention for these keys
     if watch_keys:
         # events from accounts we follow, pow if any, not applied
-        ret.append({
-            'authors': watch_keys
-        })
-        # events to/mention accounts we follow, pow if any, applied
-        ret.append({
-            '#p': watch_keys
-        })
-        if pow:
-            ret.append({})
+        if direction in {'both', 'from'}:
+            ret.append({
+                'authors': watch_keys
+            })
+        if direction in {'both', 'to'}:
 
-    # more general filter, even with watchkeys we need to use this if nip5
-    # because we want events not in are watch keys to test against nip5
-    # which can't be done from a filter alone
+            if pow:
+                ret.append({
+                    'authors': watch_keys,
+                    '#p': watch_keys,
+                })
+
+            ret.append({
+                '#p': watch_keys
+            })
+
+
+    # not watching any particular authors, in this case direction won't be important
     else:
         ret.append({})
 
@@ -559,6 +572,7 @@ def output_rel_date(rel_date: datetime, the_date: datetime) -> str:
 
 async def print_run_info(relay,
                          as_user,
+                         contacts,
                          extra_view_profiles,
                          inboxes,
                          view_kinds,
@@ -567,7 +581,8 @@ async def print_run_info(relay,
                          limit,
                          pow,
                          nip5,
-                         profile_handler
+                         profile_handler,
+                         direction,
                          ):
     c_p: Profile
     c_c: Contact
@@ -576,22 +591,24 @@ async def print_run_info(relay,
     # output running info
     if as_user:
         print('events will be displayed as user %s' % as_user.display_name())
-        print('--- follows ---')
+        if contacts:
+            print('--- contacts ---')
 
-        # this will group fetch all follow profiles so they won't be fetch individually
-        # when we list
-        await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
-                                           create_missing=True)
+            # this will group fetch all follow profiles so they won't be fetch individually
+            # when we list
+            await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
+                                               create_missing=True)
 
-        for f_k in as_user.contacts.follow_keys()[:10]:
-            c_p = await profile_handler.get_profile(f_k)
-            if c_p:
-                print(c_p.display_name())
-            else:
-                print(c_c.contact_public_key)
-        if len(as_user.contacts) > 10:
-            print(f'and {len(as_user.contacts)-10} more...')
-
+            for f_k in as_user.contacts.follow_keys()[:10]:
+                c_p = await profile_handler.get_profile(f_k)
+                if c_p:
+                    print(c_p.display_name())
+                else:
+                    print(c_c.contact_public_key)
+            if len(as_user.contacts) > 10:
+                print(f'and {len(as_user.contacts)-10} more...')
+        else:
+            print('contacts not added to view')
 
     else:
         print('runnning without a user')
@@ -618,7 +635,7 @@ async def print_run_info(relay,
 
     print(''.join(filter_about))
 
-    print(f'pow for non follows ({pow}) and nip5 check ({nip5})')
+    print(f'pow for non follows ({pow}) and nip5 check ({nip5}) direction ({direction})')
 
 
 async def main(args):
@@ -653,6 +670,9 @@ async def main(args):
     # user that we running as, if this user has priv_k then where needed we'll do decryption and output plaintext
     as_user: Profile = config['as_user']
 
+    # add add user contacts to view
+    view_contacts = config['contacts']
+
     # extra profiles requested to view other than contacts of as_user or inboxes
     extra_view_profiles = config['view_extra']
 
@@ -662,6 +682,9 @@ async def main(args):
     inboxes = config['inboxes']
     inbox_keys = config['inbox_keys']
     share_keys = config['shared_keys']
+
+    # sent from or to or both keys we've given
+    direction = config['direction']
 
     # if this is true then output is just the json as we recieve ot
     output = config['output']
@@ -729,13 +752,17 @@ async def main(args):
                                  limit=limit,
                                  mention_eids=mention_eids,
                                  kinds=fetch_kinds,
-                                 pow=pow)
+                                 pow=pow,
+                                 nip5=nip5check,
+                                 direction=direction)
 
     # show run info
     await print_run_info(relay=relay,
                          as_user=as_user,
+                         contacts=view_contacts,
                          extra_view_profiles=extra_view_profiles,
                          inboxes=inboxes,
+                         direction=direction,
                          view_kinds=view_kinds,
                          since=since,
                          until=until,
@@ -806,6 +833,7 @@ async def main(args):
                                       printer=my_printer,
                                       classifier=MyClassifier(event_ids=mention_eids,
                                                               as_user=as_user,
+                                                              view_contacts=view_contacts,
                                                               view_profiles=view_profiles,
                                                               public_inboxes=inboxes),
                                       nip5helper=nip5helper,
