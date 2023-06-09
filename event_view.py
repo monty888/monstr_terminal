@@ -514,16 +514,9 @@ def get_event_filters(view_profiles: [Profile],
             })
         if direction in {'both', 'to'}:
 
-            if pow:
-                ret.append({
-                    'authors': watch_keys,
-                    '#p': watch_keys,
-                })
-
             ret.append({
                 '#p': watch_keys
             })
-
 
     # not watching any particular authors, in this case direction won't be important
     else:
