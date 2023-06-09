@@ -30,6 +30,8 @@ AS_USER = None
 VIEW_EXTRA = None
 # look in these 'inboxes' also
 INBOXES = None
+# max number of events to return init q
+LIMIT = 10
 # number of hours to look back at star up
 SINCE = 6
 # get events until - note if using until there's not really any point staying running as new events won't come in!
@@ -79,6 +81,17 @@ def get_profiles_from_keys(keys: str,
         if private_only and the_key.private_key_hex() is None:
             raise ConfigError('%s is not a private key' % c_key)
         ret.append(the_key)
+    return ret
+
+
+def get_init_or_none(val: str, f_name: str):
+    ret = None
+    try:
+        if val is not None:
+            ret = int(val)
+    except ValueError as e:
+        if val.lower() != 'none':
+            raise ConfigError(f'{f_name} - {val} not a numeric value')
     return ret
 
 
@@ -155,18 +168,20 @@ async def get_from_config(config,
     if as_user is not None and as_user.private_key:
         shared_keys = PostApp.get_clust_shared_keymap_for_profile(as_user, all_view)
 
-    try:
-        since = int(config['since'])
-    except ValueError as e:
-        raise ConfigError('since - %s not a numeric value' % config['since'])
 
-    # extract
-    until = config['until']
-    try:
-        if config['until'] is not None:
-            until = int(config['until'])
-    except ValueError as e:
-        raise ConfigError(f'until - {config["until"]} not a numeric value')
+
+    # try:
+    #     since = int(config['since'])
+    # except ValueError as e:
+    #     raise ConfigError('since - %s not a numeric value' % config['since'])
+    #
+    # # extract
+    # until = config['until']
+    # try:
+    #     if config['until'] is not None:
+    #         until = int(config['until'])
+    # except ValueError as e:
+    #     raise ConfigError(f'until - {config["until"]} not a numeric value')
 
 
     # kind of events that'll we output
@@ -195,8 +210,9 @@ async def get_from_config(config,
         'inboxes': inboxes,
         'inbox_keys': inbox_keys,
         'shared_keys': shared_keys,
-        'since': since,
-        'until': until,
+        'since': get_init_or_none(config['since'], 'since'),
+        'until': get_init_or_none(config['until'], 'until'),
+        'limit': get_init_or_none(config['limit'], 'limit'),
         'kinds': kinds,
         'tags': tags
     })
@@ -375,9 +391,11 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                 comma separated event kinds to output,
                                 default[{args['kinds']}]""")
-    parser.add_argument('-s', '--since', action='store', default=args['since'], type=int,
+    parser.add_argument('-l', '--limit', action='store', default=args['limit'],
+                        help=f'max number of events to return, default [{args["limit"]}]')
+    parser.add_argument('-s', '--since', action='store', default=args['since'],
                         help=f'show events n hours previous to running, default [{args["since"]}]')
-    parser.add_argument('-u', '--until', action='store', default=args['until'], type=int,
+    parser.add_argument('-u', '--until', action='store', default=args['until'],
                         help=f'show events n hours after since, default [{args["until"]}]')
     parser.add_argument('--pubkey', action='store_true', default=args['pubkey'],
                         help=f"""
@@ -388,7 +406,7 @@ def get_cmdline_args(args) -> dict:
                                     comma separated tag types to output, =* for all
                                     default[{args['tags']}]""")
 
-    parser.add_argument('-p', '--pow', action='store', choices=[8,12, 16, 20, 24, 28, 32], default=args['pow'],
+    parser.add_argument('-p', '--pow', action='store', choices=[8, 12, 16, 20, 24, 28, 32], default=args['pow'],
                         type=int,
                         help=f"""
                                         minimum amount required for events excluding contacts of as_user
@@ -412,7 +430,7 @@ def get_cmdline_args(args) -> dict:
     ret = parser.parse_args()
 
     # so --as_user opt can be overridden empty if its defined in config file
-    if ret.as_user =='' or ret.as_user.lower() == 'none':
+    if ret.as_user == '' or ret.as_user.lower() == 'none':
         ret.as_user = None
 
     return vars(ret)
@@ -433,6 +451,7 @@ def get_args() -> dict:
         'as_user': AS_USER,
         'view_extra': VIEW_EXTRA,
         'via': INBOXES,
+        'limit': LIMIT,
         'since': SINCE,
         'until': UNTIL,
         'kinds': KINDS,
@@ -464,10 +483,11 @@ def get_args() -> dict:
 
 def get_event_filters(view_profiles: [Profile],
                       since: datetime,
-                      until: int = None,
-                      mention_eids: [str] = None,
-                      kinds: [int] = [Event.KIND_TEXT_NOTE, Event.KIND_ENCRYPT],
-                      pow: int = None):
+                      until: datetime,
+                      limit: int,
+                      mention_eids: [str],
+                      kinds: [int],
+                      pow: int):
 
     ret = []
     watch_keys = []
@@ -499,12 +519,15 @@ def get_event_filters(view_profiles: [Profile],
     # add common filter paras to all filters
     for c_f in ret:
         # since and kinds always added
-        c_f['since'] = util_funcs.date_as_ticks(since)
         c_f['kinds'] = kinds
 
         # other fields that may be added
+        if limit:
+            c_f['limit'] = limit
+        if since:
+            c_f['since'] = util_funcs.date_as_ticks(since)
         if until:
-            c_f['until'] = until
+            c_f['until'] = util_funcs.date_as_ticks(until)
         if mention_eids:
             c_f['#e'] = mention_eids
         # pow added if we didn't specify authors, this include to filter
@@ -519,6 +542,83 @@ def get_event_filters(view_profiles: [Profile],
         })
 
     return ret
+
+
+def output_rel_date(rel_date: datetime, the_date: datetime) -> str:
+    """
+        returns str output for the_date base on rel_date
+        at the moment this just means if rel_date.date() == the_date.date()
+        date output won't be output
+    """
+    if rel_date.date() == the_date.date():
+        ret = the_date.strftime('%H:%M:%S')
+    else:
+        ret = the_date.strftime('%d/%m/%Y-%H:%M:%S')
+    return ret
+
+
+async def print_run_info(relay,
+                         as_user,
+                         extra_view_profiles,
+                         inboxes,
+                         view_kinds,
+                         since,
+                         until,
+                         limit,
+                         pow,
+                         nip5,
+                         profile_handler
+                         ):
+    c_p: Profile
+    c_c: Contact
+    print(f'using relays {relay}')
+
+    # output running info
+    if as_user:
+        print('events will be displayed as user %s' % as_user.display_name())
+        print('--- follows ---')
+
+        # this will group fetch all follow profiles so they won't be fetch individually
+        # when we list
+        await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
+                                           create_missing=True)
+
+        for f_k in as_user.contacts.follow_keys()[:10]:
+            c_p = await profile_handler.get_profile(f_k)
+            if c_p:
+                print(c_p.display_name())
+            else:
+                print(c_c.contact_public_key)
+        if len(as_user.contacts) > 10:
+            print(f'and {len(as_user.contacts)-10} more...')
+
+
+    else:
+        print('runnning without a user')
+
+    if extra_view_profiles:
+        print('--- extra profiles ---')
+        for c_p in extra_view_profiles:
+            print(c_p.display_name())
+
+    if inboxes:
+        print('--- checking inboxes ---')
+        for c_p in inboxes:
+            print(c_p.display_name())
+
+    filter_about = [f'showing events of kind {view_kinds}']
+    now = datetime.now()
+    if since is not None:
+        filter_about.append(f' from {output_rel_date(now, since)}')
+
+    if until:
+        filter_about.append(f' -> {output_rel_date(since, until)}')
+
+    filter_about.append(f' limit {limit}')
+
+    print(''.join(filter_about))
+
+    print(f'pow for non follows ({pow}) and nip5 check ({nip5})')
 
 
 async def main(args):
@@ -550,14 +650,18 @@ async def main(args):
         my_client.end()
         sys.exit(2)
 
+    # user that we running as, if this user has priv_k then where needed we'll do decryption and output plaintext
     as_user: Profile = config['as_user']
+
+    # extra profiles requested to view other than contacts of as_user or inboxes
+    extra_view_profiles = config['view_extra']
+
+    # all view profiles, contains all pubks that we're going to request from relay to make our view
     view_profiles = config['all_view']
 
     inboxes = config['inboxes']
     inbox_keys = config['inbox_keys']
     share_keys = config['shared_keys']
-    since = config['since']
-    until = config['until']
 
     # if this is true then output is just the json as we recieve ot
     output = config['output']
@@ -591,6 +695,21 @@ async def main(args):
     # keep track of last events seen so we can reconnect without getting same events again
     last_event_track = LastEventHandler()
 
+    # events from since point, after initial events this is updated
+    # so on reconnect we don't go back and get all old events again
+    since = config['since']
+    if since is not None:
+        since = datetime.now() - timedelta(hours=since)
+
+    # until this date - note on reaching until date (maybe in the future)
+    # we might as well exit or have option to exit as no more events will come in
+    until = config['until']
+    if until is not None:
+        until = since + timedelta(hours=until)
+
+    # rough max limit of events at bootstrap (before live incoming events)
+    limit = config['limit']
+
     # used to check that the events that we get back from relay match those we requested
     # the actual filter used is set when we add the filter in on_connect
     e_filter_acceptor = FilterAcceptor()
@@ -607,60 +726,23 @@ async def main(args):
         return get_event_filters(view_profiles=view_profiles,
                                  since=with_since,
                                  until=until,
+                                 limit=limit,
                                  mention_eids=mention_eids,
                                  kinds=fetch_kinds,
                                  pow=pow)
 
-    async def print_run_info():
-        c_p: Profile
-        c_c: Contact
-        print(f'using relays {relay}')
-        extra_view_profiles = config['view_extra']
-        # output running info
-        if as_user:
-            print('events will be displayed as user %s' % as_user.display_name())
-            print('--- follows ---')
-
-            # this will group fetch all follow profiles so they won't be fetch individually
-            # when we list
-            await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
-                                               create_missing=True)
-
-            for f_k in as_user.contacts.follow_keys():
-                c_p = await profile_handler.get_profile(f_k)
-                if c_p:
-                    print(c_p.display_name())
-                else:
-                    print(c_c.contact_public_key)
-        else:
-            print('runnning without a user')
-
-        if extra_view_profiles:
-            print('--- extra profiles ---')
-            for c_p in extra_view_profiles:
-                print(c_p.display_name())
-
-        if inboxes:
-            print('--- checking inboxes ---')
-            for c_p in inboxes:
-                print(c_p.display_name())
-
-        print(f'showing events of kind {view_kinds} from now minus {since} hours')
-        if until:
-            print(f'until {until} hours from this point')
-
-        print(f'pow for non follows ({pow}) and nip5 check ({nip5})')
-
     # show run info
-    await print_run_info()
-    # change to since to point in time
-    since = datetime.now() - timedelta(hours=since)
-
-    since_url = {}
-
-    # same for util if it is a value, which is taken as hours from since
-    if until:
-        until = util_funcs.date_as_ticks(since + timedelta(hours=until))
+    await print_run_info(relay=relay,
+                         as_user=as_user,
+                         extra_view_profiles=extra_view_profiles,
+                         inboxes=inboxes,
+                         view_kinds=view_kinds,
+                         since=since,
+                         until=until,
+                         limit=limit,
+                         pow=pow,
+                         nip5=nip5,
+                         profile_handler=profile_handler)
 
     def my_connect(the_client: Client):
         # so on reconnect we don't ask for everything again
@@ -740,6 +822,8 @@ async def main(args):
     # but these would have been the last shown
     the_events = await my_client.query(filters=boot_e_filter,
                                        do_event=last_event_track.do_event)
+    if limit:
+        the_events = the_events[:limit]
 
     await print_handler.ado_event(
         the_client=None,
