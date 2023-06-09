@@ -200,13 +200,12 @@ class FormattedEventPrinter:
         style = await self._get_pub_k_style(evt.pub_key)
 
         name = create_p.name
-        nip05 = create_p.get_attr("nip05")
-        nip05_name = None
+
         nip05_domain = None
         name_nip05match = False
 
-        if nip05:
-            nip05_split = nip05.split('@')
+        if create_p.nip05:
+            nip05_split = create_p.nip05.split('@')
             if len(nip05_split) > 1:
                 nip05_name = nip05_split[0]
                 nip05_domain = nip05_split[1]
@@ -219,16 +218,14 @@ class FormattedEventPrinter:
 
         txt_arr.append((style, name))
 
-
-        # nip5 ifo if any
-        nip05 = create_p.get_attr("nip05")
-        if nip05:
+        # nip5 info if any
+        if create_p.nip05:
             nip5_style = ''
 
             if self._nip5helper:
                 nip5_style = self._nip5_invalid_style
                 try:
-                    if await self._nip5helper.is_valid(nip05, create_p.public_key):
+                    if await self._nip5helper.is_valid(create_p.nip05, create_p.public_key):
                         nip5_style = self._nip5_valid_style
                 except NIP5Error as ne:
                     pass
@@ -236,7 +233,7 @@ class FormattedEventPrinter:
             if name_nip05match:
                 txt_arr.append((nip5_style, f'@{nip05_domain}'))
             else:
-                txt_arr.append((nip5_style, f' ({nip05})'))
+                txt_arr.append((nip5_style, f' ({create_p.nip05})'))
 
 
         txt_arr.append(('', ' ---'))

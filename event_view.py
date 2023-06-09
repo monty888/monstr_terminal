@@ -10,7 +10,8 @@ from monstr.ident.profile import Profile, Contact, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
-from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, NotOnlyNumbersAcceptor, EventHandler, LastEventHandler
+from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, \
+    NotOnlyNumbersAcceptor, EventHandler, LastEventHandler, FilterAcceptor
 from monstr.util import util_funcs
 from monstr.event.event import Event
 from monstr.encrypt import Keys
@@ -590,6 +591,10 @@ async def main(args):
     # keep track of last events seen so we can reconnect without getting same events again
     last_event_track = LastEventHandler()
 
+    # used to check that the events that we get back from relay match those we requested
+    # the actual filter used is set when we add the filter in on_connect
+    e_filter_acceptor = FilterAcceptor()
+
     # just a wrap around get_event_filters so we don't have to call with all the
     # fields all the time
     def my_get_event_filters(with_since):
@@ -676,7 +681,9 @@ async def main(args):
 
         # get the event filter with since
         event_filter = my_get_event_filters(with_since=use_since)
-
+        # set filter to the acceptor - if a relay gives us events that don't pass our filter we'll reject
+        e_filter_acceptor.filter = event_filter
+        # now subscribe
         the_client.subscribe(handlers=[print_handler,
                                        last_event_track],
                              filters=event_filter)
@@ -701,11 +708,19 @@ async def main(args):
     elif output == 'content':
         my_printer = ContentPrinter()
 
+    # initial filter to get upto now
+    boot_e_filter = my_get_event_filters(with_since=since)
+
+    # set inital accept criteria, this is a double check on what relays return
+    # e_filter_acceptor.filter = boot_e_filter
+
     # event handler for printing events
     print_handler = PrintEventHandler(profile_handler=profile_handler,
                                       event_acceptors=[DeduplicateAcceptor(),
+                                                       e_filter_acceptor,
                                                        LengthAcceptor(),
-                                                       NotOnlyNumbersAcceptor()],
+                                                       NotOnlyNumbersAcceptor()
+                                                       ],
                                       printer=my_printer,
                                       classifier=MyClassifier(event_ids=mention_eids,
                                                               as_user=as_user,
@@ -723,7 +738,7 @@ async def main(args):
     # or atleast fail, but the output is less confusing timewise as before a fast relay
     # might have returned all its events before another one that only has a few older events
     # but these would have been the last shown
-    the_events = await my_client.query(filters=my_get_event_filters(with_since=since),
+    the_events = await my_client.query(filters=boot_e_filter,
                                        do_event=last_event_track.do_event)
 
     await print_handler.ado_event(
@@ -737,7 +752,6 @@ async def main(args):
         # because we're already connected we'll call manually
         if c_client.connected:
             my_connect(c_client)
-
 
     while True:
         await asyncio.sleep(0.1)
