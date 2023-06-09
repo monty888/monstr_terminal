@@ -300,18 +300,24 @@ class FormattedEventPrinter:
             txt_arr.append((await self._get_pub_k_style(evt.pub_key), f'{out_pk}'))
 
         if self._show_tags:
-            all_tag_names = {c_tag[0] for c_tag in evt.tags}
-            for c_tag_name in all_tag_names:
-                txt_arr.append(('', f'\n{depth_align}'))
-                txt_arr.append(('cyan', '-tags-'))
-                if '*' in self._show_tags or c_tag_name in self._show_tags:
+            txt_arr.append(('', f'\n{depth_align}'))
+            txt_arr.append(('cyan', '-tags-'))
 
+            all_tag_names = list(evt.tags.tag_names)
+            all_tag_names.sort()
+
+            for c_tag_name in all_tag_names:
+
+                if '*' in self._show_tags or c_tag_name in self._show_tags:
+                    # tag header
+                    txt_arr.append(('cyan', f'\n{depth_align}{c_tag_name}'))
+
+                    # now output values
                     for c_tag_v in evt.get_tags(c_tag_name):
                         v_style = ''
                         if c_tag_name == 'p':
                             v_style = await self._get_pub_k_style(c_tag_v[0])
 
-                        txt_arr.append(('cyan', f'\n{depth_align}{c_tag_name}'))
                         txt_arr.append(('', f'\n{depth_align}['))
                         sep = ''
                         for i, item in enumerate(c_tag_v):
@@ -332,7 +338,7 @@ class FormattedEventPrinter:
                                 txt_arr.append(('', f'{sep}{item_val}'))
                             sep = ','
 
-                        txt_arr.append(('', ']\n'))
+                        txt_arr.append(('', ']'))
 
         # actualy do the output if any
         return txt_arr
