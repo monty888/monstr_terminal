@@ -301,7 +301,7 @@ class FormattedEventPrinter:
 
         if self._show_tags:
             txt_arr.append(('', f'\n{depth_align}'))
-            txt_arr.append(('cyan', '-tags-'))
+            txt_arr.append(('cyan', f'-tags-'))
 
             all_tag_names = list(evt.tags.tag_names)
             all_tag_names.sort()

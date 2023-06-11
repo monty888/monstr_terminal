@@ -35,13 +35,13 @@ VIEW_EXTRA = None
 # look in these 'inboxes' also
 INBOXES = None
 # max number of events to return init q
-LIMIT = 10
+LIMIT = 20
 # number of hours to look back at star up
-SINCE = 6
+SINCE = None
 # get events until - note if using until there's not really any point staying running as new events won't come in!
 UNTIL = None
 # so we can just use a file
-CONFIG_FILE = f'{WORK_DIR}event_view.toml'
+CONFIG_FILE = f'view.toml'
 # default output event kinds
 KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
 # for non contacts event must reach this pow to be output
@@ -88,7 +88,7 @@ def get_profiles_from_keys(keys: str,
     return ret
 
 
-def get_init_or_none(val: str, f_name: str):
+def get_int_or_none(val: str, f_name: str) ->int:
     ret = None
     try:
         if val is not None:
@@ -144,8 +144,8 @@ async def get_from_config(config,
                 all_view = all_view + contact_ps.profiles
 
     # addtional profiles to view other than current profile
-    if config['view_profiles']:
-        view_keys = get_profiles_from_keys(config['view_profiles'],
+    if config['view_extra']:
+        view_keys = get_profiles_from_keys(config['view_extra'],
                                            private_only=False,
                                            single_only=False,
                                            alias_map=alias_map)
@@ -177,7 +177,7 @@ async def get_from_config(config,
 
     # kind of events that'll we output
     try:
-        kinds = {int(v) for v in config['kinds'].split(',')}
+        kinds = {int(v) for v in str(config['kinds']).split(',')}
     except ValueError as e:
         raise ConfigError(f'kinds should be integer values got {config["kinds"]}')
 
@@ -201,9 +201,9 @@ async def get_from_config(config,
         'inboxes': inboxes,
         'inbox_keys': inbox_keys,
         'shared_keys': shared_keys,
-        'since': get_init_or_none(config['since'], 'since'),
-        'until': get_init_or_none(config['until'], 'until'),
-        'limit': get_init_or_none(config['limit'], 'limit'),
+        'since': get_int_or_none(config['since'], 'since'),
+        'until': get_int_or_none(config['until'], 'until'),
+        'limit': get_int_or_none(config['limit'], 'limit'),
         'kinds': kinds,
         'tags': tags
     })
@@ -353,6 +353,59 @@ class ContentPrinter:
         await aioconsole.aprint(evt.content)
 
 
+def get_args() -> dict:
+    """
+    get args to use order is
+        default -> toml_file -> cmd_line options
+
+    so command line option is given priority if given
+
+    :return: {}
+    """
+
+    ret = {
+        'work-dir': WORK_DIR,
+        'conf': CONFIG_FILE,
+        'relay': RELAYS,
+        'as-user': AS_USER,
+        'contacts': VIEW_CONTACTS,
+        'view-extra': VIEW_EXTRA,
+        'via': INBOXES,
+        'direction': DIRECTION,
+        'limit': LIMIT,
+        'since': SINCE,
+        'until': UNTIL,
+        'kinds': KINDS,
+        'pow': POW,
+        'nip5': False,
+        'nip5check': False,
+        'pubkey': False,
+        'match-tags': None,
+        'hashtag': None,
+        'tags': None,
+        'eid': None,
+        'output': OUTPUT,
+        'ssl-disable-verify': None,
+        'entities': False,
+        'debug': False,
+    }
+
+    # only done to get the work-dir and conf options if set
+    ret.update(get_cmdline_args(ret))
+
+    # now form config file if any
+    ret.update(load_toml(ret['conf'], ret['work-dir']))
+
+    # 2pass so that cmdline options override conf file options
+    ret.update(get_cmdline_args(ret))
+
+    # if debug flagged enable now
+    if ret['debug'] is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug(f'get_args:: running with options - {ret}')
+
+    return ret
+
 def get_cmdline_args(args) -> dict:
     parser = argparse.ArgumentParser(
         prog='event_view.py',
@@ -360,23 +413,27 @@ def get_cmdline_args(args) -> dict:
             view nostr events from the command line
             """
     )
+    parser.add_argument('-c', '--conf', action='store', default=args['conf'],
+                        help=f'name com TOML file to use for configuration, default[{args["conf"]}]')
+    parser.add_argument('--work-dir', action='store', default=args['work-dir'],
+                        help=f'base dir for files used if full path isn\'t given, default[{args["work-dir"]}]')
     parser.add_argument('-r', '--relay', action='store', default=args['relay'],
                         help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
-    parser.add_argument('-a', '--as_user', action='store', default=args['as_user'],
+    parser.add_argument('-a', '--as-user', action='store', default=args['as-user'],
                         help=f"""
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                         encrypted events will be left encrypted, 
-                        default[{args['as_user']}]""")
+                        default[{args['as-user']}]""")
     parser.add_argument('--contacts', action='store_true',
                         help='if as_user lookup contacts and add to view',
                         default=args['contacts'])
     parser.add_argument('--no-contacts', action='store_false',
                         help='if as user DO NOT add contacts to view',
                         default=args['contacts'], dest='contacts')
-    parser.add_argument('--view_profiles', action='store', default=args['view_extra'],
+    parser.add_argument('--view-extra', action='store', default=args['view-extra'],
                         help=f"""
                             additional comma separated alias, priv_k or pub_k of user to view,
-                            default[{args['view_extra']}]""")
+                            default[{args['view-extra']}]""")
     parser.add_argument('-v', '--via', action='store', default=args['via'],
                         help=f"""
                             additional comma separated alias(with priv_k) or priv_k that will be used 
@@ -401,6 +458,8 @@ def get_cmdline_args(args) -> dict:
                         help=f'show events n hours previous to running, default [{args["since"]}]')
     parser.add_argument('-u', '--until', action='store', default=args['until'],
                         help=f'show events n hours after since, default [{args["until"]}]')
+    parser.add_argument('--hashtag', action='store', default=args['hashtag'],
+                        help=f'only events with t tag value will be matched, default[{args["hashtag"]}]')
     parser.add_argument('--pubkey', action='store_true', default=args['pubkey'],
                         help=f"""
                                         output event author pubkey
@@ -418,73 +477,27 @@ def get_cmdline_args(args) -> dict:
 
     parser.add_argument('-e', '--entities', action='store_true',
                         help='output event_id and pubkeys as nostr entities',
-                        default=args['nip5'])
+                        default=args['entities'])
+    parser.add_argument('--no-entities', action='store_false',
+                        help='do not output event_id and pubkeys as nostr entities',
+                        default=(not args['entities']), dest='entities')
     parser.add_argument('--nip5check', action='store_true',
                         help='nip5 checked and displayed green if good',
-                        default=args['nip5'])
+                        default=args['nip5check'])
     parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of as_user',
                         default=args['nip5'])
     parser.add_argument('-o', '--output', action='store', choices=['formatted', 'json', 'content'], default=args['output'],
                         help=f"""
                                         how to display events
                                         default[{args['output']}]""")
-    parser.add_argument('--ssl_disable_verify', action='store_true', help='disables checks of ssl certificates')
+    parser.add_argument('--ssl-disable-verify', action='store_true', help='disables checks of ssl certificates')
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
-
     # so --as_user opt can be overridden empty if its defined in config file
-    if ret.as_user == '' or ret.as_user.lower() == 'none':
+    if ret.as_user and (ret.as_user == '' or ret.as_user.lower() == 'none'):
         ret.as_user = None
-
     return vars(ret)
-
-
-def get_args() -> dict:
-    """
-    get args to use order is
-        default -> toml_file -> cmd_line options
-
-    so command line option is given priority if given
-
-    :return: {}
-    """
-
-    ret = {
-        'relay': RELAYS,
-        'as_user': AS_USER,
-        'contacts': VIEW_CONTACTS,
-        'view_extra': VIEW_EXTRA,
-        'via': INBOXES,
-        'direction': DIRECTION,
-        'limit': LIMIT,
-        'since': SINCE,
-        'until': UNTIL,
-        'kinds': KINDS,
-        'pow': POW,
-        'nip5': False,
-        'nip5check': False,
-        'pubkey': False,
-        'tags': None,
-        'eid': None,
-        'output': OUTPUT,
-        'ssl_disable_verify': None,
-        'entities': False,
-        'debug': False,
-    }
-
-    # now form config file if any
-    ret.update(load_toml(CONFIG_FILE))
-
-    # now from cmd line
-    ret.update(get_cmdline_args(ret))
-
-    # if debug flagged enable now
-    if ret['debug'] is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.debug(f'get_args:: running with options - {ret}')
-
-    return ret
 
 
 def get_event_filters(view_profiles: [Profile],
@@ -493,6 +506,7 @@ def get_event_filters(view_profiles: [Profile],
                       limit: int,
                       mention_eids: [str],
                       kinds: [int],
+                      hash_tag: str,
                       pow: int,
                       nip5: bool,
                       direction: str):
@@ -536,6 +550,9 @@ def get_event_filters(view_profiles: [Profile],
             c_f['until'] = util_funcs.date_as_ticks(until)
         if mention_eids:
             c_f['#e'] = mention_eids
+        if hash_tag:
+            c_f['#t'] = [hash_tag]
+
         # pow added if we didn't specify authors, this include to filter
         # (pow is applied to events sent/mentioning authors we asked for)
         if pow and 'authors' not in c_f:
@@ -723,6 +740,9 @@ async def main(args):
     if until is not None:
         until = since + timedelta(hours=until)
 
+    # if given only events with this t tag will be returned
+    hash_tag = config['hashtag']
+
     # rough max limit of events at bootstrap (before live incoming events)
     limit = config['limit']
 
@@ -747,7 +767,8 @@ async def main(args):
                                  kinds=fetch_kinds,
                                  pow=pow,
                                  nip5=nip5check,
-                                 direction=direction)
+                                 direction=direction,
+                                 hash_tag=hash_tag)
 
     # show run info
     await print_run_info(relay=relay,
@@ -844,6 +865,7 @@ async def main(args):
     the_events = await my_client.query(filters=boot_e_filter,
                                        do_event=last_event_track.do_event)
     if limit:
+        Event.sort(the_events, inplace=True)
         the_events = the_events[:limit]
 
     await print_handler.ado_event(
