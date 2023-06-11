@@ -526,14 +526,19 @@ def get_event_filters(view_profiles: [Profile],
             ret.append({
                 'authors': watch_keys
             })
+
         if direction in {'both', 'to'}:
 
             ret.append({
                 '#p': watch_keys
             })
 
-    # not watching any particular authors, in this case direction won't be important
-    else:
+    # either not watching any particular authors or
+    # we're going to allow unrequested events through based on
+    # pow, nip5 or pow and nip5
+    # note in case of nip5 alone you have to fetch all events anyhow so
+    # probably best to use with at least a minimal pow
+    if not watch_keys or pow or nip5:
         ret.append({})
 
     # add common filter paras to all filters

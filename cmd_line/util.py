@@ -266,7 +266,6 @@ class FormattedEventPrinter:
             txt_arr.append(('', '\n%s' % depth_align))
             txt_arr.append(('', '[subject - %s]' % ','.join(subject_tags)))
 
-
         txt_arr.append(('','\n%s' % depth_align))
 
         id = evt.id
@@ -343,25 +342,42 @@ class FormattedEventPrinter:
         # actualy do the output if any
         return txt_arr
 
-    async def highlight_tags(self, content: str, p_tags: [], default_style=''):
+    async def highlight_tags(self, evt: Event, default_style=''):
         replacements = {}
         arr_str = []
         ret = []
-        for i, c_pk in enumerate(p_tags):
-            tag_p: Profile = await self._get_profile(c_pk)
-            replacements['#[%s]' % i] = tag_p.display_name()
+        p: Profile
 
-        for c_word in content.split(' '):
-            if c_word in replacements:
-                if arr_str:
-                    ret.append((default_style, ' '.join(arr_str)))
-                    arr_str = []
-                ret.append(('green', ' @%s ' % replacements[c_word]))
-            else:
-                arr_str.append(c_word)
+        # map tag replacements, only p tag currently
+        for i, tag_vals in enumerate(evt.tags):
+            r_v = f'#[{i}]'
+            if len(tag_vals) > 1:
+                t_n = tag_vals[0]
+                t_v = tag_vals[1]
+                if t_n == 'p':
+                    p = await self._get_profile(t_v)
+                    r_v = p.display_name()
 
-        if arr_str:
-            ret.append((default_style, ' '.join(arr_str)))
+                replacements[f'#[{i}]'] = r_v
+
+        for c_line in evt.content.splitlines():
+            ret.append(('', '\n'))
+            for c_word in c_line.split(' '):
+                if c_word in replacements:
+                    if arr_str:
+                        ret.append((default_style, ' '.join(arr_str)))
+                        arr_str = []
+
+                    # TODO: cols should be based on if we follow
+                    ret.append(('green', replacements[c_word]))
+                else:
+                    arr_str.append(c_word)
+
+            if arr_str:
+                ret.append((default_style, ' '.join(arr_str)))
+                arr_str = []
+
+
 
         return ret
 
@@ -383,7 +399,9 @@ class FormattedEventPrinter:
                 if self._as_user and \
                         (evt.pub_key == self._as_user.public_key or
                          self._as_user.public_key in evt.p_tags):
-                    txt_arr.append(('', nip_decode(evt)))
+                    content = nip_decode(evt)
+                    txt_arr += await self.highlight_tags(evt=evt,
+                                                         default_style='')
                 # clust style wrapped NIP4 event
                 elif evt.pub_key in self._inbox_view_keys:
                     inbox_p: Profile = await self._get_profile(key=evt.pub_key)
@@ -399,13 +417,17 @@ class FormattedEventPrinter:
 
                         # output unwrapped event
                         txt_arr += await self.get_event_header(unwrapped_evt, depth=1)
-                        txt_arr += [('', '\n\t' + content)]
+                        # txt_arr += [('', '\n\t' + content)]
+                        txt_arr += await self.highlight_tags(evt=evt,
+                                                             default_style='')
                         txt_arr += await self.get_event_footer(unwrapped_evt, depth=1)
 
                     else:
                         # event inbox that we should be able to decrypt but...
                         txt_arr.append(('', f'\tunable to decrypt evt in inbox({inbox_p.display_name()})-->'))
-                        txt_arr.append(('gray', evt.content))
+                        txt_arr += await self.highlight_tags(evt=evt,
+                                                             default_style='gray')
+                        # txt_arr.append(('gray', evt.content))
 
                 # encrypted event that we don't have the info to decrypt
                 else:
@@ -417,7 +439,9 @@ class FormattedEventPrinter:
 
         # anything other that encrypted just treated as text
         else:
-            txt_arr.append(('', evt.content))
+            content = evt.content
+            txt_arr += await self.highlight_tags(evt=evt,
+                                                 default_style='')
 
         return txt_arr
 
