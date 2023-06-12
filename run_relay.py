@@ -59,7 +59,7 @@ DEBUG_LEVEL = logging.DEBUG
 DB_TYPE = 'sqlite'
 # make this default home, wouldn't work on windows
 WORK_DIR = f'{Path.home()}/.nostrpy/'
-CONFIG_FILE = WORK_DIR + 'relay.toml'
+CONFIG_FILE = 'relay.toml'
 SQL_LITE_FILE = f'{WORK_DIR}nostr-relay.db'
 PG_USER = 'postgres'
 PG_PASSWORD = 'password'
@@ -206,7 +206,8 @@ def get_args() -> dict:
     }
 
     # now form config file if any
-    ret.update(load_toml(CONFIG_FILE))
+    ret.update(load_toml(dir=WORK_DIR,
+                         filename=CONFIG_FILE))
 
     # now from cmd line
     ret.update(get_cmdline_args(ret))
