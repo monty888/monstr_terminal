@@ -248,6 +248,18 @@ async def main(args):
     ssl_cert = args['ssl_cert']
     ssl_key = args['ssl_key']
 
+    # relay information NIP11
+    relay_info = {
+        'software': 'https://github.com/monty888/monstr_terminal',
+        'version': '0.1.1'
+    }
+    # copy fields from args - from TOML file
+    if 'relay_information' in args:
+        for k, v in args['relay_information'].items():
+            # only these fields will be added
+            if k in {'name', 'pubkey', 'contact'}:
+                relay_info[k] = v
+
     # tor - can be a bit painful to get working.. mainly I think to do with file permissions
     # problems include not ouputting onion address because for whatever reason we can read teh file
     # not stopping cleanly - exceptions
@@ -301,7 +313,8 @@ async def main(args):
     my_relay = Relay(my_store,
                      max_sub=max_sub,
                      accept_req_handler=accept_handlers,
-                     ack_events=nip20)
+                     ack_events=nip20,
+                     relay_information=relay_info)
 
     ssl_context = None
     protocol = 'ws'
@@ -311,10 +324,12 @@ async def main(args):
         protocol = 'wss'
 
     def print_run_info():
+        col_size = 40
         print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
-        print(f'{"Event treatment (NIP16)".ljust(40)} {nip16}')
-        print(f'{"Command events (NIP20)".ljust(40)} {nip20}')
-        print(f'{"Parameterized replaceable events (NIP33)".ljust(40)} {nip33}')
+        for k,v in my_relay.relay_information.items():
+            print(f'{k.ljust(40)} {v}')
+        # print(my_relay.relay_information)
+
 
     # access via tor?
     if enable_tor:
