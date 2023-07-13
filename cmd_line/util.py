@@ -152,7 +152,6 @@ class FormattedEventPrinter:
             self._encrypted_kinds = {Event.KIND_ENCRYPT}
 
     async def print_event(self, the_client, sub_id, evt: Event):
-        print(evt)
         print_formatted_text(FormattedText(await self.get_event_header(evt)))
         print_formatted_text(FormattedText(await self.get_event_content(evt)))
         print_formatted_text(FormattedText(await self.get_event_footer(evt)))
