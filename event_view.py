@@ -330,9 +330,9 @@ class PrintEventHandler(EventHandler):
                 #   if pow is false and nip5 is true and nip5 validates
                 #   if pow is true and nip5 is true and nip5 validates
                 if rating == 'good' or (self._pow is False and self._nip5 is False):
-                    await self._printer.print_event(c_evt)
+                    await self._printer.print_event(the_client, sub_id, c_evt)
                 elif self._pow and self._nip5 is False:
-                    await self._printer.print_event(c_evt)
+                    await self._printer.print_event(the_client, sub_id, c_evt)
                 elif self._nip5:
                     await self._printer_event_if_nip5(c_evt)
 
@@ -343,13 +343,13 @@ class PrintEventHandler(EventHandler):
 
 class JSONPrinter:
     # outputs event in raw format
-    async def print_event(self, evt: Event):
+    async def print_event(self, the_client: Client, sub_id, evt: Event):
         await aioconsole.aprint(evt.event_data())
 
 
 class ContentPrinter:
     # output just the content of an event
-    async def print_event(self, evt: Event):
+    async def print_event(self, the_client: Client, sub_id, evt: Event):
         await aioconsole.aprint(evt.content)
 
 
@@ -795,7 +795,7 @@ async def main(args):
         use_since = since
 
         if last_event_track.get_last_event_dt(the_client):
-            use_since = last_event_track.get_last_event_dt(the_client)
+            use_since = last_event_track.get_last_event_dt(the_client)+timedelta(seconds=1)
 
         # sub just for keeping profiles upto date
         the_client.subscribe(handlers=[profile_handler,
@@ -812,8 +812,7 @@ async def main(args):
         # set filter to the acceptor - if a relay gives us events that don't pass our filter we'll reject
         e_filter_acceptor.filter = event_filter
         # now subscribe
-        the_client.subscribe(handlers=[print_handler,
-                                       last_event_track],
+        the_client.subscribe(handlers=[last_event_track, print_handler],
                              filters=event_filter)
 
     # actually does the outputting
@@ -878,7 +877,8 @@ async def main(args):
         sub_id=None,
         evt=the_events)
 
-    print('*** listening for more events ***')
+    await aioconsole.aprint('*** listening for more events ***')
+
     for c_client in my_client:
         my_client.set_on_eose(print_handler.do_event)
         # because we're already connected we'll call manually
@@ -888,8 +888,6 @@ async def main(args):
     while True:
         await asyncio.sleep(0.1)
     my_client.end()
-
-
 
 
 if __name__ == "__main__":
