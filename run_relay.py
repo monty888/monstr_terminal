@@ -13,7 +13,7 @@ except Exception as e:
     pass
 from monstr.relay.relay import Relay
 from monstr.relay.accept_handlers import LengthAcceptReqHandler
-from monstr.event.persist import RelayPostgresEventStore # postgres store needs to be fixed...
+from monstr.event.persist_postgres import RelayPostgresEventStore
 from monstr.event.persist_sqlite import ARelaySQLiteEventStore
 from monstr.event.persist_memory import RelayMemoryEventStore
 from monstr.util import ConfigError
@@ -71,11 +71,12 @@ async def get_sql_store(filename, is_nip16, is_nip33):
     return ret
 
 
-def get_postgres_store(db_name, user, password, is_nip16):
+def get_postgres_store(db_name, user, password, is_nip16, is_nip33):
     ret = RelayPostgresEventStore(db_name=db_name,
                                   user=user,
                                   password=password,
-                                  is_nip16=is_nip16)
+                                  is_nip16=is_nip16,
+                                  is_nip33=is_nip33)
 
     if not ret.exists():
         ret.create()
@@ -284,7 +285,8 @@ async def main(args):
         my_store = get_postgres_store(db_name=args['pg_database'],
                                       user=args['pg_user'],
                                       password=args['pg_password'],
-                                      is_nip16=nip16)
+                                      is_nip16=nip16,
+                                      is_nip33=nip33)
         # blank the password from printout
         args['pg_password'] = '***'
 
