@@ -12,7 +12,7 @@ try:
 except Exception as e:
     pass
 from monstr.relay.relay import Relay
-from monstr.relay.accept_handlers import LengthAcceptReqHandler
+from monstr.relay.accept_handlers import LengthAcceptReqHandler, CreateAtAcceptor
 from monstr.event.persist_postgres import RelayPostgresEventStore
 from monstr.event.persist_sqlite import ARelaySQLiteEventStore
 from monstr.event.persist_memory import RelayMemoryEventStore
@@ -36,7 +36,9 @@ PG_DATABASE = 'nostr-relay'
 MAX_SUB = 10
 MAX_CONTENT_LENGTH = None
 SSL = False
-
+# acceptance created_at (mins)
+MAX_BEFORE = None
+MAX_AFTER = 5
 
 def create_work_dir():
     if not os.path.isdir(WORK_DIR):
@@ -117,6 +119,12 @@ def get_cmdline_args(args) -> dict:
     parser.add_argument('--maxlength', action='store', default=args['maxlength'], type=int,
                         help=f'maximum length for event content if any, default[{args["maxlength"]}]')
 
+    # nip22 acceptable created_at ranges
+    parser.add_argument('--max-before', action='store', default=args['max_before'], type=int,
+                        help=f'maximum time before current time to accept created_at of events if any (mins), default[{args["max_before"]}]')
+    parser.add_argument('--max-after', action='store', default=args['max_after'], type=int,
+                        help=f'maximum time after current time to accept created_at of events if any (mins), default[{args["max_after"]}]')
+
     # nip support flags, both enable and disable versions so a def true can be overriden
     parser.add_argument('--nip16', action='store_true',
                         help=f"""enable NIP16 - Event treatment, ephemeral and replaceable event ranges
@@ -180,6 +188,8 @@ def get_args() -> dict:
         'pg_password': PG_PASSWORD,
         'maxsub': MAX_SUB,
         'maxlength': MAX_CONTENT_LENGTH,
+        'max_before': MAX_BEFORE,
+        'max_after': MAX_AFTER,
         'nip16': True,
         'nip20': True,
         'nip33': True,
@@ -238,6 +248,14 @@ async def main(args):
     # sub options
     max_sub = args['maxsub']
     max_length = args['maxlength']
+
+    # nip22 created out acceptable
+    max_before = args['max_before']
+    if max_before:
+        max_before = max_before * 60
+    max_after = args['max_after']
+    if max_after:
+        max_after = max_after * 60
 
     # get nip flags
     nip16 = args['nip16']
@@ -306,6 +324,10 @@ async def main(args):
     accept_handlers = []
     if max_length:
         accept_handlers.append(LengthAcceptReqHandler(max=max_length))
+    if max_before or max_after:
+        accept_handlers.append(CreateAtAcceptor(max_before=max_before,
+                                                max_after=max_after))
+
 
     for c_handler in accept_handlers:
         logging.info(c_handler)
@@ -329,7 +351,7 @@ async def main(args):
         col_size = 40
         print(f'running relay at {protocol}://{host}:{port}{end_point} persiting events to store {store}')
         for k,v in my_relay.relay_information.items():
-            print(f'{k.ljust(40)} {v}')
+            print(f'{k.ljust(col_size)} {v}')
         # print(my_relay.relay_information)
 
 
