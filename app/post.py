@@ -69,7 +69,8 @@ class PostApp:
                  public_inbox: Profile = None,
                  subject=None,
                  is_encrypt=True,
-                 kind=None
+                 kind=None,
+                 tags=None
                  ):
         """
         :param as_user:     posts made as this user
@@ -105,6 +106,9 @@ class PostApp:
         # not, doesn't stop you from encrypting data send e.g. over kind 1 though you probably don't want to do that
         else:
             self._kind = kind
+
+        # tags to be added to every post
+        self._tags = tags
 
         # de-duplicating of events for when we're connected to multiple relays
         self._acceptors = [
@@ -221,10 +225,12 @@ class PostApp:
         :param subject:
         :return:
         """
-
         tags = []
         if self._to_users:
             tags = [['p', p.public_key] for p in self._to_users]
+
+        if self._tags:
+            tags = tags + self._tags
 
         if self._subject is not None:
             tags.append(['subject', self._subject])

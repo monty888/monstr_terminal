@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import sys
 from pathlib import Path
 import argparse
 from monstr.ident.profile import Profile
@@ -10,8 +11,8 @@ from monstr.event.event import Event
 from app.post import PostApp
 from cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
-from monstr.util import util_funcs
-from util import ConfigError, load_toml
+from monstr.util import util_funcs, ConfigError
+from util import load_toml
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
@@ -155,7 +156,8 @@ async def get_poster(client: Client,
                      inbox_k: Keys,
                      is_encrypt: bool,
                      subject: str,
-                     kind: int):
+                     kind: int,
+                     tags: str):
     k: Keys
 
     # get profiles of from/to if we can
@@ -194,7 +196,9 @@ async def get_poster(client: Client,
                        public_inbox=inbox_p,
                        subject=subject,
                        is_encrypt=is_encrypt,
-                       kind=kind)
+                       kind=kind,
+                       tags=tags)
+
     return {
         'post_app': post_app,
         'user': user_p,
@@ -210,7 +214,8 @@ async def post_single(relays: [str],
                       is_encrypt: bool,
                       subject: str,
                       message: str,
-                      kind: int = None):
+                      kind: int = None,
+                      tags: str = None):
 
     async with ClientPool(relays, timeout=10) as client:
         post_env = await get_poster(client=client,
@@ -219,7 +224,8 @@ async def post_single(relays: [str],
                                     inbox_k=inbox_k,
                                     is_encrypt=is_encrypt,
                                     subject=subject,
-                                    kind=kind)
+                                    kind=kind,
+                                    tags=tags)
 
         post_app: PostApp = post_env['post_app']
         user: Profile = post_env['user']
@@ -246,6 +252,7 @@ async def post_loop(relays: [str],
                     is_encrypt: bool,
                     subject: str,
                     kind: int,
+                    tags: str,
                     encrypted_kinds: set):
 
     sub_id: str = None
@@ -311,7 +318,8 @@ async def post_loop(relays: [str],
                                     inbox_k=inbox_k,
                                     is_encrypt=is_encrypt,
                                     subject=subject,
-                                    kind=kind)
+                                    kind=kind,
+                                    tags=tags)
 
         post_app: PostApp = post_env['post_app']
         my_gui = PostAppGui(post_app,
@@ -352,7 +360,11 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                 add subject tag to post,,
                                 default[{args['subject']}]""")
-
+    parser.add_argument('--tags', action='store', default=args['tags'],
+                        help=f"""
+                                tags to add post in format tagname:value1,value2...;
+                                default[{args["tags"]}]
+    """)
     parser.add_argument('message', type=str, nargs='*',
                        help='an integer for the accumulator')
     parser.add_argument('-k', '--kind', action='store', help='kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is True', type=int,
@@ -366,7 +378,6 @@ def get_cmdline_args(args) -> dict:
         'default'
     }, default='default')
 
-
     parser.add_argument('-i', '--ignore_missing', action='store_true', help='don\'t fail on missing to_users')
     parser.add_argument('-l', '--loop', action='store_true', help='stay open to enter and receive messages')
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output')
@@ -375,6 +386,19 @@ def get_cmdline_args(args) -> dict:
 
     return vars(ret)
 
+def get_tags(tags:str)->[[]]:
+    ret = None
+    for c_tag in tags.split('#'):
+        split_vals = c_tag.split(':')
+        if len(split_vals) < 2:
+            logging.debug(f'get_tags: ignoring {split_vals} no values')
+        else:
+            if ret is None:
+                ret = []
+            ret.append(split_vals)
+
+    logging.debug(f'get_tags: got tag values {ret}')
+    return ret
 
 def get_args() -> dict:
     """
@@ -395,6 +419,7 @@ def get_args() -> dict:
         'kind': None,
         'ignore_missing': False,
         'subject': None,
+        'tags': None,
         'message': None,
         'loop': False,
         'alias_file': ALIAS_FILE,
@@ -412,6 +437,10 @@ def get_args() -> dict:
     if ret['debug'] is True:
         logging.getLogger().setLevel(logging.DEBUG)
         logging.debug(f'get_args:: running with options - {ret}')
+
+    # if any tags, see if we can make into anything sensible...
+    if ret['tags']:
+        ret['tags'] = get_tags(ret['tags'])
 
     return ret
 
@@ -452,6 +481,9 @@ async def main(args):
     # events to be treated as encrypted, none means default 4
     encrypted_kinds = None
 
+    # tags if any to be added to posts
+    tags = args['tags']
+
     # no kind given we'll choice base on format
     if kind is None:
         if format in {'encrypt', 'default'}:
@@ -478,52 +510,53 @@ async def main(args):
     # human alias to keys
     key_alias = ProfileFileAlias(alias_file)
 
-    try:
-        if loop is False and not message:
-            raise ConfigError('no message supplied to post')
+    if loop is False and not message:
+        raise ConfigError('no message supplied to post')
 
-        user_keys = get_user_keys(user,
-                                  alias_map=key_alias)
-
-        if is_encrypt and to_users is None:
-            raise ConfigError('to users is required for encrypted messages')
-
-        to_keys = get_to_keys(to_users, ignore_missing,
+    user_keys = get_user_keys(user,
                               alias_map=key_alias)
 
-        inbox_keys = None
-        if inbox:
-            inbox_keys = get_user_keys(inbox, alias_map=key_alias)
+    if is_encrypt and to_users is None:
+        raise ConfigError('to users is required for encrypted messages')
 
-        if loop is False:
-            await post_single(relays=relays,
-                              user_k=user_keys,
-                              to_users_k=to_keys,
-                              inbox_k=inbox_keys,
-                              is_encrypt=is_encrypt,
-                              subject=subject,
-                              message=message,
-                              kind=kind
-                              )
-        else:
-            await post_loop(relays=relays,
-                            user_k=user_keys,
-                            to_users_k=to_keys,
-                            inbox_k=inbox_keys,
-                            is_encrypt=is_encrypt,
-                            subject=subject,
-                            kind=kind,
-                            encrypted_kinds=encrypted_kinds
-                            )
+    to_keys = get_to_keys(to_users, ignore_missing,
+                          alias_map=key_alias)
 
-    except ConfigError as ce:
-        print(ce)
+    inbox_keys = None
+    if inbox:
+        inbox_keys = get_user_keys(inbox, alias_map=key_alias)
+
+    if loop is False:
+        await post_single(relays=relays,
+                          user_k=user_keys,
+                          to_users_k=to_keys,
+                          inbox_k=inbox_keys,
+                          is_encrypt=is_encrypt,
+                          subject=subject,
+                          message=message,
+                          kind=kind,
+                          tags=tags
+                          )
+    else:
+        await post_loop(relays=relays,
+                        user_k=user_keys,
+                        to_users_k=to_keys,
+                        inbox_k=inbox_keys,
+                        is_encrypt=is_encrypt,
+                        subject=subject,
+                        kind=kind,
+                        tags=tags,
+                        encrypted_kinds=encrypted_kinds
+                        )
 
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(logging.FATAL)
     util_funcs.create_work_dir(WORK_DIR)
-    asyncio.run(main(get_args()))
+    try:
+        asyncio.run(main(get_args()))
+    except ConfigError as ce:
+        print(ce)
 
 
 
