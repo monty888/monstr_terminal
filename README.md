@@ -157,8 +157,11 @@ python alias.py -n monty -k nsec....
 basic relay implementation:
 
 ```commandline
-usage: run_relay.py [-h] [--host HOST] [--port PORT] [--endpoint ENDPOINT] [-s {sqlite,postgres,transient,none}] [--dbfile DBFILE] [--pg_database PG_DATABASE] [--pg_user PG_USER] [--pg_password PG_PASSWORD]
-                    [--maxsub MAXSUB] [--maxlength MAXLENGTH] [--nip16] [--no-nip16] [--nip20] [--no-nip20] [--nip33] [--no-nip33] [--ssl] [--tor] [-w] [-d]
+python run_relay.py --help
+usage: run_relay.py [-h] [--host HOST] [--port PORT] [--endpoint ENDPOINT] [-s {sqlite,postgres,transient,none}] [--dbfile DBFILE]
+                    [--pg_database PG_DATABASE] [--pg_user PG_USER] [--pg_password PG_PASSWORD] [--maxsub MAXSUB] [--maxlength MAXLENGTH]
+                    [--max-before MAX_BEFORE] [--max-after MAX_AFTER] [--nip16] [--no-nip16] [--nip20] [--no-nip20] [--nip33] [--no-nip33]
+                    [--ssl] [--tor] [-w] [-d]
 
 runs a nostr relay
 
@@ -178,16 +181,23 @@ options:
   --maxsub MAXSUB       maximum open subs allowed per client websocket, default[10]
   --maxlength MAXLENGTH
                         maximum length for event content if any, default[None]
-  --nip16               enable NIP16 - Event treatment, ephemeral and replaceable event ranges see https://github.com/nostr-protocol/nips/blob/master/16.md, default[True]
-  --no-nip16            disable NIP16 - Event treatment, ephemeral and replaceable event ranges default[False]
+  --max-before MAX_BEFORE
+                        maximum time before current time to accept created_at of events if any (mins), default[None]
+  --max-after MAX_AFTER
+                        maximum time after current time to accept created_at of events if any (mins), default[5]
+  --nip16               enable NIP16 - Event treatment, ephemeral and replaceable event ranges see https://github.com/nostr-
+                        protocol/nips/blob/master/16.md, default[True]
+  --no-nip16            disable NIP16, default[False]
   --nip20               enable NIP20 - OK command events see https://github.com/nostr-protocol/nips/blob/master/20.md, default[True]
-  --no-nip20            disable NIP20 - OK command events, default[False]
-  --nip33               disable NIP33 - Parameterized Replaceable Events see https://github.com/nostr-protocol/nips/blob/master/20.md, default[True]
-  --no-nip33            disable NIP33 - Parameterized Replaceable Events, default[False]
+  --no-nip20            disable NIP20, default[False]
+  --nip33               enable NIP33 - Parameterized Replaceable Events see https://github.com/nostr-protocol/nips/blob/master/20.md,
+                        default[True]
+  --no-nip33            disable NIP33, default[False]
   --ssl                 run ssl ssl_key and ssl_cert will need to be defined
   --tor                 make realy accessable over tor
   -w, --wipe            wipes event store and exits
   -d, --debug           enable debug output
+
 ```
 The following options can currently only be set in the TOML config file: 
  

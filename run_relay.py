@@ -132,8 +132,7 @@ def get_cmdline_args(args) -> dict:
                         default=args['nip16'])
 
     parser.add_argument('--no-nip16', action='store_false',dest='nip16',
-                        help=f"""disable NIP16 - Event treatment, ephemeral and replaceable event ranges
-                        default[{not args["nip16"]}]""",
+                        help=f"""disable NIP16, default[{not args["nip16"]}]""",
                         default=args['nip16'])
 
     parser.add_argument('--nip20', action='store_true',
@@ -141,15 +140,15 @@ def get_cmdline_args(args) -> dict:
                 see https://github.com/nostr-protocol/nips/blob/master/20.md, default[{args["nip20"]}]""",
                         default=args['nip20'])
     parser.add_argument('--no-nip20', action='store_false',dest='nip20',
-                        help=f"""disable NIP20 - OK command events, default[{not args["nip20"]}]""",
+                        help=f"""disable NIP20, default[{not args["nip20"]}]""",
                         default=args['nip20'])
 
     parser.add_argument('--nip33', action='store_true',
-                        help=f"""disable NIP33 - Parameterized Replaceable Events
+                        help=f"""enable NIP33 - Parameterized Replaceable Events
                     see https://github.com/nostr-protocol/nips/blob/master/20.md, default[{args["nip33"]}]""",
                         default=args['nip33'])
     parser.add_argument('--no-nip33', action='store_false',dest='nip33',
-                        help=f"""disable NIP33 - Parameterized Replaceable Events, default[{not args["nip33"]}]""",
+                        help=f"""disable NIP33, default[{not args["nip33"]}]""",
                         default=args['nip33'])
 
     # end nips
