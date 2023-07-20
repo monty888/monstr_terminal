@@ -339,7 +339,7 @@ def get_cmdline_args(args) -> dict:
     parser = argparse.ArgumentParser(
         prog='poster.py',
         description="""
-            post nostr text(1) and encrypted text(4) events from the command line
+            post nostr events from the command line
             """
     )
     parser.add_argument('-r', '--relay', action='store', default=args['relay'],
@@ -362,7 +362,7 @@ def get_cmdline_args(args) -> dict:
                                 default[{args['subject']}]""")
     parser.add_argument('--tags', action='store', default=args['tags'],
                         help=f"""
-                                tags to add post in format tagname:value1,value2...;
+                                tags to add post in format tagname:v1,v2#tagname:v1...
                                 default[{args["tags"]}]
     """)
     parser.add_argument('message', type=str, nargs='*',

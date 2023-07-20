@@ -70,10 +70,11 @@ an account for which bother poster and receiver have priv key so that meta is hi
 
 ```commandline
 python poster.py --help
-usage: poster.py [-h] [-r RELAY] [-a AS_USER] [-t TO_USERS] [-v VIA] [-s SUBJECT] [-k KIND] [-f {encrypt,default,plaintext}] [-i] [-l] [-d]
+usage: poster.py [-h] [-r RELAY] [-a AS_USER] [-t TO_USERS] [-v VIA] [-s SUBJECT] [--tags TAGS]
+                 [-k KIND] [-f {plaintext,encrypt,default}] [-i] [-l] [-d]
                  [message ...]
 
-post nostr text(1) and encrypted text(4) events from the command line
+post nostr events from the command line
 
 positional arguments:
   message               an integer for the accumulator
@@ -81,21 +82,26 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[wss://nostr-pub.wellorder.net,wss://nos.lol]
+                        comma separated nostr relays to connect to, default[wss://nostr-
+                        pub.wellorder.net,wss://nos.lol]
   -a AS_USER, --as_user AS_USER
                         alias, priv_k of user to post as, default[monty]
   -t TO_USERS, --to_users TO_USERS
                         comma seperated alias, priv_k, or pub_k of user to post to, default[None]
-  -v VIA, --via VIA     alias(with priv_k) or nsec that will be used as public inbox with wrapped events, default[None]
+  -v VIA, --via VIA     alias(with priv_k) or nsec that will be used as public inbox with wrapped
+                        events, default[None]
   -s SUBJECT, --subject SUBJECT
                         add subject tag to post,, default[None]
-  -k KIND, --kind KIND  kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is True
-  -f {encrypt,default,plaintext}, --format {encrypt,default,plaintext}
-                        format of the event content if default is selected then events of kind 4 will be encrypted and all other kinds will be
-                        plaintext
+  --tags TAGS           tags to add post in format tagname:v1,v2#tagname:v1... default[None]
+  -k KIND, --kind KIND  kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is
+                        True
+  -f {plaintext,encrypt,default}, --format {plaintext,encrypt,default}
+                        format of the event content if default is selected then events of kind 4 will be
+                        encrypted and all other kinds will be plaintext
   -i, --ignore_missing  don't fail on missing to_users
   -l, --loop            stay open to enter and receive messages
   -d, --debug           enable debug output
+
 ```
 
 ![poster open in loopmode](poster.png)
