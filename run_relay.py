@@ -16,6 +16,7 @@ from monstr.relay.accept_handlers import LengthAcceptReqHandler, CreateAtAccepto
 from monstr.event.persist_postgres import RelayPostgresEventStore
 from monstr.event.persist_sqlite import ARelaySQLiteEventStore
 from monstr.event.persist_memory import RelayMemoryEventStore
+from monstr.event.expire import ASQLiteNIP40Expirer, MemoryNIP40Expirer
 from monstr.util import ConfigError
 from util import load_toml
 import ssl
@@ -151,6 +152,14 @@ def get_cmdline_args(args) -> dict:
                         help=f"""disable NIP33, default[{not args["nip33"]}]""",
                         default=args['nip33'])
 
+    parser.add_argument('--nip40', action='store_true',
+                        help=f"""enable NIP40 - Expiration Timestamp
+                        see https://github.com/nostr-protocol/nips/blob/master/40.md, default[{args["nip40"]}]""",
+                        default=args['nip40'])
+    parser.add_argument('--no-nip40', action='store_false', dest='nip40',
+                        help=f"""disable NIP40, default[{not args["nip40"]}]""",
+                        default=args['nip40'])
+
     # end nips
     parser.add_argument('--ssl', action='store_true', help='run ssl ssl_key and ssl_cert will need to be defined',
                         default=args['ssl'])
@@ -192,6 +201,7 @@ def get_args() -> dict:
         'nip16': True,
         'nip20': True,
         'nip33': True,
+        'nip40': True,
         'ssl': SSL,
         'ssl_key': None,
         'ssl_cert': None,
@@ -260,6 +270,7 @@ async def main(args):
     nip16 = args['nip16']
     nip20 = args['nip20']
     nip33 = args['nip33']
+    nip40 = args['nip40']
 
     # ssl options
     is_ssl = args['ssl']
@@ -290,12 +301,18 @@ async def main(args):
     # get the store type we're using and create
     store = args['store']
     my_store = None
+    my_expire = None
+    # if expiration enable, events removed every 5 mins
+    expire_interval = 60*5
 
     # create storage object which is either to sqllite, posgres or transient
     if store == 'sqlite':
         my_store = await get_sql_store(filename=args['dbfile'],
                                        is_nip16=nip16,
                                        is_nip33=nip33)
+        if nip40:
+            my_expire = ASQLiteNIP40Expirer(db=my_store.DB,
+                                            interval=expire_interval)
 
     # Postgres store at the moment ios fucked and needs fixing... shouldn't be too much work
     elif store == 'postgres':
@@ -306,10 +323,20 @@ async def main(args):
                                       is_nip33=nip33)
         # blank the password from printout
         args['pg_password'] = '***'
+        if nip40:
+            print('WARNING: NIP40 set true but currently no expirer for postgres so won\'t be enabled')
 
     elif store == 'transient':
         my_store = RelayMemoryEventStore(is_nip16=nip16,
                                          is_nip33=nip33)
+        if nip40:
+            my_expire = MemoryNIP40Expirer(interval=expire_interval)
+
+    # if we have an event expirer start it
+    if my_expire:
+        asyncio.create_task(my_expire.run())
+        relay_info['supported_nips'] = [40]
+
 
     # just running to empty db
     if is_wipe:
