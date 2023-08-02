@@ -330,7 +330,8 @@ async def main(args):
         my_store = RelayMemoryEventStore(is_nip16=nip16,
                                          is_nip33=nip33)
         if nip40:
-            my_expire = MemoryNIP40Expirer(interval=expire_interval)
+            my_expire = MemoryNIP40Expirer(interval=expire_interval,
+                                           store=my_store)
 
     # if we have an event expirer start it
     if my_expire:
