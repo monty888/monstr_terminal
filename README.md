@@ -1,10 +1,25 @@
 # install
-> git clone --recurse-submodules https://github.com/monty888/monstr_terminal.git  
-> cd monstr_terminal  
-> python3 -m venv venv   
-> source venv/bin/activate   
-> pip install -r requirements.txt   
-> pip install ./monstr
+
+```sh
+$ git clone --recurse-submodules https://github.com/monty888/monstr_terminal.git  
+$ cd monstr_terminal  
+$ python3 -m venv venv   
+$ source venv/bin/activate   
+$ pip install -r requirements.txt   
+$ pip install ./monstr
+```
+
+to use postgres as store psycopg2 must be installed
+```sh
+$ # install wheel helper, if needed.
+$ pip pip install wheel
+$ # maybe required on linux
+$ # sudo apt install postgresql automake pkg-config libtool
+$ # maybe required on mac
+$ # brew install postgresql automake pkg-config libtool libffi
+$ # now actually install psycopg2
+$ pip install psycopg2
+```
 
 # event view
 nostr event viewer for the command line. 
