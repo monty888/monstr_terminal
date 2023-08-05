@@ -12,7 +12,7 @@ try:
 except Exception as e:
     pass
 from monstr.relay.relay import Relay
-from monstr.relay.accept_handlers import LengthAcceptReqHandler, CreateAtAcceptor
+from monstr.relay.accept_handlers import LengthAcceptReqHandler, CreateAtAcceptor, AuthenticatedAcceptor
 from monstr.event.persist_postgres import RelayPostgresEventStore
 from monstr.event.persist_sqlite import ARelaySQLiteEventStore
 from monstr.event.persist_memory import RelayMemoryEventStore
@@ -160,6 +160,15 @@ def get_cmdline_args(args) -> dict:
                         help=f"""disable NIP40, default[{not args["nip40"]}]""",
                         default=args['nip40'])
 
+    # TODO: add extra support file list of keys, or to use list event by given pub_k to set access keys
+    parser.add_argument('--nip42', action='store_true',
+                        help=f"""enable NIP42 - Authentication of clients to relays
+                            see https://github.com/nostr-protocol/nips/blob/master/42.md, default[{args["nip42"]}]""",
+                        default=args['nip42'])
+    parser.add_argument('--no-nip42', action='store_false', dest='nip42',
+                        help=f"""disable NIP42, default[{not args["nip42"]}]""",
+                        default=args['nip42'])
+
     # end nips
     parser.add_argument('--ssl', action='store_true', help='run ssl ssl_key and ssl_cert will need to be defined',
                         default=args['ssl'])
@@ -202,6 +211,7 @@ def get_args() -> dict:
         'nip20': True,
         'nip33': True,
         'nip40': True,
+        'nip42': False,
         'ssl': SSL,
         'ssl_key': None,
         'ssl_cert': None,
@@ -271,6 +281,8 @@ async def main(args):
     nip20 = args['nip20']
     nip33 = args['nip33']
     nip40 = args['nip40']
+    nip42 = args['nip42']
+
 
     # ssl options
     is_ssl = args['ssl']
@@ -349,6 +361,8 @@ async def main(args):
 
     # optional message accept handlers
     accept_handlers = []
+    if nip42:
+        accept_handlers.append(AuthenticatedAcceptor())
     if max_length:
         accept_handlers.append(LengthAcceptReqHandler(max=max_length))
     if max_before or max_after:
@@ -365,7 +379,8 @@ async def main(args):
                      max_sub=max_sub,
                      accept_req_handler=accept_handlers,
                      ack_events=nip20,
-                     relay_information=relay_info)
+                     relay_information=relay_info,
+                     request_auth=nip42)
 
     ssl_context = None
     protocol = 'ws'

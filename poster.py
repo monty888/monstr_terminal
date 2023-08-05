@@ -217,7 +217,13 @@ async def post_single(relays: [str],
                       kind: int = None,
                       tags: str = None):
 
-    async with ClientPool(relays, timeout=10) as client:
+    def on_auth(the_client: Client, challenge: str):
+        auth_k = user_k
+        if inbox_k:
+            auth_k = inbox_k
+        the_client.auth(auth_k, challenge)
+
+    async with ClientPool(relays, timeout=10, on_auth=on_auth) as client:
         post_env = await get_poster(client=client,
                                     user_k=user_k,
                                     to_users_k=to_users_k,
@@ -310,7 +316,13 @@ async def post_loop(relays: [str],
     def on_connect(the_client: Client):
         do_sub()
 
-    async with ClientPool(relays) as my_client:
+    def on_auth(the_client: Client, challenge: str):
+        auth_k = user_k
+        if inbox_k:
+            auth_k = inbox_k
+        the_client.auth(auth_k, challenge)
+
+    async with ClientPool(relays, on_auth=on_auth) as my_client:
         peh = NetworkedProfileEventHandler(client=my_client)
         post_env = await get_poster(client=my_client,
                                     user_k=user_k,
