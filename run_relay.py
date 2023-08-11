@@ -218,6 +218,7 @@ def get_args() -> dict:
         'tor': False,
         'tor_password': None,
         'tor_service_dir': None,
+        'tor_empheral': True,
         'debug': False
     }
 
@@ -301,14 +302,13 @@ async def main(args):
             if k in {'name', 'pubkey', 'contact'}:
                 relay_info[k] = v
 
-    # tor - can be a bit painful to get working.. mainly I think to do with file permissions
-    # problems include not ouputting onion address because for whatever reason we can read teh file
-    # not stopping cleanly - exceptions
-    # also getting tor to use our own service dir if supplied
-    # currently tor_password, tor_dir can only be set in teh toml file
+
+    # empheral is easier as doesn't need to access any files
+    # password, service_dir and empheral can only be se in toml currently
     enable_tor = args['tor']
     tor_password = args['tor_password']
     tor_dir = args['tor_service_dir']
+    tor_empheral = args['tor_empheral']
 
     # get the store type we're using and create
     store = args['store']
@@ -400,8 +400,10 @@ async def main(args):
     # access via tor?
     if enable_tor:
         with TORService(relay_port=port,
-                        service_dir=None,
-                        password=tor_password) as my_tor:
+                        service_dir=tor_dir,
+                        password=tor_password,
+                        isSSL=protocol=='wss',
+                        empheral=tor_empheral) as my_tor:
             print_run_info()
             await my_relay.start(host=host,
                                  port=port,
@@ -417,47 +419,88 @@ async def main(args):
 
 class TORService:
 
-    def __init__(self, relay_port, service_dir=None, password=None):
+    def __init__(self, relay_port, service_dir=None, password=None, isSSL = False, empheral=True):
         try:
             if Controller:
                 pass
         except NameError as ne:
             raise ConfigError(f'No Controller class - try pip install stem')
 
+        # the relays actual port if we were to it normally
         self._relay_port = relay_port
 
-        # if not provided will later use controller to find service dir
-        # though permissions on that dir can be a bit of a pain so maybe best just to provide own
-        self._hidden_service_dir = service_dir
+
 
         # password used to auth with controller
         # best to supply - but without and if tor_browser is running we still might be ok
         # (don't quite understand the exact way this is working)
         self._password = password
 
+        # the tor service will either be on port 80 http or 443 https
+        self._service_port = 80
+        if isSSL:
+            self._service_port = 443
+
+        # create the tor service as empheral
+        self._empheral = empheral
+
+        # if not empheral then this is the directory where the hidden service will be created
+        # just give the actual dir, the full path is worked out using the controller class
+        # for example something like/home/monty/tor-browser/Browser/TorBrowser/Data/[service_dir]
+        self._hidden_service_dir = service_dir
+        if self._hidden_service_dir is None:
+            self._hidden_service_dir = 'monstr_relay'
+
+
+
     def __enter__(self):
         # this will be default port probably 9051
         self._controller = Controller.from_port()
-
         if self._password is None:
             self._controller.authenticate()
         else:
             self._controller.authenticate(password=self._password)
 
-        if self._hidden_service_dir is None:
-            self._hidden_service_dir = os.path.join(self._controller.get_conf('DataDirectory', '/tmp'), 'monstr_relay')
 
+        # address of service when we have it
+        onion_addr = None
 
-        # Create a hidden service where visitors of port 80 get redirected to local
-        # port 5000 (this is where Flask runs by default).
+        # we'll get a new onion address each time
+        if self._empheral:
+            print(self._service_port)
+            result = self._controller.create_ephemeral_hidden_service({self._service_port: self._relay_port},
+                                                                      await_publication=True)
 
-        print(f' * Creating our hidden service in {self._hidden_service_dir}')
-        result = self._controller.create_hidden_service(self._hidden_service_dir, 80, target_port=self._relay_port)
-        if result and result.hostname:
-            print(f" * Our service is available at {result.hostname}, press ctrl+c to quit")
+            onion_addr = result.service_id + '.onion'
+
+        # after first create the onion address will be the same
+        else:
+            base_dir = self._controller.get_conf('DataDirectory', '/tmp')
+            actual_dir = os.path.join(base_dir, self._hidden_service_dir)
+
+            print(f' * Creating our hidden service {self._hidden_service_dir} in {base_dir}')
+            result = self._controller.create_hidden_service(actual_dir,
+                                                            self._service_port,
+                                                            target_port=self._relay_port)
+
+            onion_addr = None
+            if result:
+                onion_addr = result.hostname
+            else:
+                # probably the service already exists, try open the service_dir/hostname file
+                # not sure why create_hidden_services doesn't just return that for us anyway?
+                try:
+                    f = open(os.path.join(actual_dir, 'hostname'), "r")
+                    lines = f.readlines()
+                    onion_addr = lines[0]
+                except Exception as e:
+                    pass
+
+        if onion_addr:
+            print(f" hidden service is available at {onion_addr}")
         else:
             print(
-                " * Unable to determine our service's hostname, probably due to being unable to read the hidden service directory")
+                f" Unable to determine our service's hostname, probably due to being unable to read the hidden service directory")
 
 
     def __exit__(self, exc_type, exc_val, exc_tb):
