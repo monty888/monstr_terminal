@@ -654,7 +654,6 @@ async def print_run_info(relay,
 
 
 async def main(args):
-
     # connect to these relay
     relay = args['relay'].split(',')
 
