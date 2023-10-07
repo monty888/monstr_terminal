@@ -78,6 +78,11 @@ python event_view.py --as=<key or alias> --view=<key or alias> --via=<key or ali
 note that the view will be made by looking up the contacts event for the given key so that needs to be available 
 on the used relays. When a user is given encrypted text will automatically be decrypted. 
 
+If you want to simply hack on the incoming events you can use the `-o json` output option to get the raw json
+for each event. See `event_view_consumer.py` for an example. 
+```shell
+python event_view.py --as=<key or alias> --view=<key or alias> --via=<key or alias> -o json | python3 event_view_consumer.py
+```
 
 # poster
 post nostr events from the command line, the events can optionally be sent via an inbox (another nostr account) so that

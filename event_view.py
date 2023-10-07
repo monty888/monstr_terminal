@@ -3,6 +3,7 @@ import sys
 import signal
 import asyncio
 import argparse
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 import aioconsole
@@ -304,16 +305,14 @@ class PrintEventHandler(EventHandler):
         await self._profile_handler.get_profiles(list(ukeys),
                                                  create_missing=True)
 
-    async def ado_event(self, the_client: Client, sub_id, evt: Event):
+    async def ado_event(self, the_client: Client, sub_id, evt: list[Event]|Event):
         c_evt: Event
         if isinstance(evt, Event):
             evt = [evt]
 
-        to_print = []
-        for c_evt in evt:
-            if self.accept_event(the_client, sub_id, c_evt):
-                to_print.append(c_evt)
-
+        to_print = [
+            c_evt for c_evt in evt if self.accept_event(the_client, sub_id, c_evt)
+        ]
         if not to_print:
             return
 
@@ -336,6 +335,9 @@ class PrintEventHandler(EventHandler):
                 elif self._nip5:
                     await self._printer_event_if_nip5(c_evt)
 
+    async def astatus(self, status):
+        await self._printer.astatus(status)
+
     def do_event(self, the_client: Client, sub_id, evt: Event):
         # client only supports sync do_event - maybe change?
         asyncio.create_task(self.ado_event(the_client, sub_id, evt))
@@ -344,14 +346,18 @@ class PrintEventHandler(EventHandler):
 class JSONPrinter:
     # outputs event in raw format
     async def print_event(self, the_client: Client, sub_id, evt: Event):
-        await aioconsole.aprint(evt.event_data())
+        await aioconsole.aprint(json.dumps(evt.event_data()))
 
+    async def astatus(self, status:str):
+        return
 
 class ContentPrinter:
     # output just the content of an event
     async def print_event(self, the_client: Client, sub_id, evt: Event):
         await aioconsole.aprint(evt.content)
 
+    async def astatus(self, status:str):
+        await aioconsole.aprint(status)
 
 def get_args() -> dict:
     """
@@ -404,6 +410,9 @@ def get_args() -> dict:
         logging.getLogger().setLevel(logging.DEBUG)
         logging.debug(f'get_args:: running with options - {ret}')
 
+    if not ret['relay']:
+        print('Required argument relay is missing. Use -r or --relay. ')
+        exit(1)
     return ret
 
 def get_cmdline_args(args) -> dict:
@@ -876,7 +885,7 @@ async def main(args):
         sub_id=None,
         evt=the_events)
 
-    await aioconsole.aprint('*** listening for more events ***')
+    await my_printer.astatus('*** listening for more events ***')
 
     for c_client in my_client:
         my_client.set_on_eose(print_handler.do_event)
