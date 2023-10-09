@@ -36,34 +36,48 @@ view nostr events from the command line
 
 options:
   -h, --help            show this help message and exit
+  -c CONF, --conf CONF  name com TOML file to use for configuration, default[view.toml]
+  --work-dir WORK_DIR   base dir for files used if full path isn't given, default[/home/monty/.nostrpy/]
   -r RELAY, --relay RELAY
-                        comma separated nostr relays to connect to, default[wss://nostr-pub.wellorder.net,wss://nos.lol,wss://relay.nostr.band]
-  -a AS_USER, --as_user AS_USER
-                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left
-                        encrypted, default[monty]
-  --view_profiles VIEW_PROFILES
+                        comma separated nostr relays to connect to, default[None]
+  -a AS_USER, --as-user AS_USER
+                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events
+                        will be left encrypted, default[None]
+  --contacts            if as_user lookup contacts and add to view
+  --no-contacts         if as user DO NOT add contacts to view
+  --view-extra VIEW_EXTRA
                         additional comma separated alias, priv_k or pub_k of user to view, default[None]
-  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with wrapped events,
-                        default[None]
-  -i EID, --id EID      comma separated event ids will be added as e tag filter e.g with kind=42 can be used to view a chat channel,
-                        default[None]
+  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with
+                        wrapped events, default[None]
+  --direction {from,both,to}
+                        if query with author keys if we are looking for events sent from, sent to or both with those keys
+                        default[both]
+  -i EID, --id EID      comma separated event ids will be added as e tag filter e.g with kind=42 can be used to view a
+                        chat channel, default[None]
   -k KINDS, --kinds KINDS
                         comma separated event kinds to output, default[1,4]
+  -l LIMIT, --limit LIMIT
+                        max number of events to return, default [20]
   -s SINCE, --since SINCE
-                        show events n hours previous to running, default [6]
+                        show events n hours previous to running, default [None]
   -u UNTIL, --until UNTIL
                         show events n hours after since, default [None]
+  --hashtag HASHTAG     only events with t tag value will be matched, default[None]
   --pubkey              output event author pubkey default[False]
   -t TAGS, --tags TAGS  comma separated tag types to output, =* for all default[None]
   -p {8,12,16,20,24,28,32}, --pow {8,12,16,20,24,28,32}
                         minimum amount required for events excluding contacts of as_user default[None]
   -e, --entities        output event_id and pubkeys as nostr entities
-  --nip5check           nip5 checked and displayed green if good
+  --no-entities         do not output event_id and pubkeys as nostr entities
+  --nip5check           nip5 checked and displayed green if valid
   -n, --nip5            valid nip5 required for events excluding contacts of as_user
+  --start-mode {all,first}
+                        at start wait for ALL relays to return events before starting to print or just FIRST default[all]
   -o {formatted,json,content}, --output {formatted,json,content}
                         how to display events default[formatted]
-  --ssl_disable_verify  disables checks of ssl certificates
+  --ssl-disable-verify  disables checks of ssl certificates
   -d, --debug           enable debug output
+
 ```
 
 
@@ -81,7 +95,7 @@ on the used relays. When a user is given encrypted text will automatically be de
 If you want to simply hack on the incoming events you can use the `-o json` output option to get the raw json
 for each event. See `event_view_consumer.py` for an example. 
 ```shell
-python event_view.py --as=<key or alias> --view=<key or alias> --via=<key or alias> -o json | python3 event_view_consumer.py
+python event_view.py --as=<key or alias> --view=<key or alias> --via=<key or alias> -o json | python event_view_consumer.py
 ```
 
 # poster
@@ -97,27 +111,25 @@ usage: poster.py [-h] [-r RELAY] [-a AS_USER] [-t TO_USERS] [-v VIA] [-s SUBJECT
 post nostr events from the command line
 
 positional arguments:
-  message               an integer for the accumulator
+  message               message to post
 
 options:
   -h, --help            show this help message and exit
   -r RELAY, --relay RELAY
                         comma separated nostr relays to connect to, default[wss://nostr-
-                        pub.wellorder.net,wss://nos.lol]
+                        pub.wellorder.net,wss://nos.lol,wss://relay.nostr.band]
   -a AS_USER, --as_user AS_USER
                         alias, priv_k of user to post as, default[monty]
   -t TO_USERS, --to_users TO_USERS
                         comma seperated alias, priv_k, or pub_k of user to post to, default[None]
-  -v VIA, --via VIA     alias(with priv_k) or nsec that will be used as public inbox with wrapped
-                        events, default[None]
+  -v VIA, --via VIA     alias(with priv_k) or nsec that will be used as public inbox with wrapped events, default[None]
   -s SUBJECT, --subject SUBJECT
                         add subject tag to post,, default[None]
   --tags TAGS           tags to add post in format tagname:v1,v2#tagname:v1... default[None]
-  -k KIND, --kind KIND  kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is
-                        True
+  -k KIND, --kind KIND  kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is True
   -f {plaintext,encrypt,default}, --format {plaintext,encrypt,default}
-                        format of the event content if default is selected then events of kind 4 will be
-                        encrypted and all other kinds will be plaintext
+                        format of the event content if default is selected then events of kind 4 will be encrypted and all
+                        other kinds will be plaintext
   -i, --ignore_missing  don't fail on missing to_users
   -l, --loop            stay open to enter and receive messages
   -d, --debug           enable debug output

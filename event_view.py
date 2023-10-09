@@ -47,6 +47,8 @@ CONFIG_FILE = f'view.toml'
 KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
 # for non contacts event must reach this pow to be output
 POW = None
+# wait for all relays before starting to output events?
+START_MODE = 'all'
 # how events should be output
 OUTPUT = 'formatted'
 
@@ -121,9 +123,8 @@ async def get_from_config(config,
                                           single_only=True,
                                           alias_map=alias_map)[0]
 
-        as_user = await profile_handler.get_profile(user_key.public_key_hex(),
-                                                    create_missing=True)
-
+        as_user = await profile_handler.aget_profile(user_key.public_key_hex(),
+                                                     create_missing=True)
         # if we were given a private key then we'll attach it to the profile so it can decode msgs
         if user_key.private_key_hex():
             as_user.private_key = user_key.private_key_hex()
@@ -136,11 +137,11 @@ async def get_from_config(config,
         # lookup and add contacts to view?
         if contacts:
             c_c: Contact
-            await profile_handler.load_contacts(as_user)
+            await profile_handler.aload_contacts(as_user)
             contacts = as_user.contacts
             if contacts:
-                contact_ps = await profile_handler.get_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
-                                                                create_missing=True)
+                contact_ps = await profile_handler.aget_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
+                                                                 create_missing=True)
 
                 all_view = all_view + contact_ps.profiles
 
@@ -151,8 +152,8 @@ async def get_from_config(config,
                                            single_only=False,
                                            alias_map=alias_map)
 
-        view_ps = await profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
-                                                     create_missing=True)
+        view_ps = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
+                                                      create_missing=True)
 
         all_view = all_view + view_ps.profiles
         view_extra = view_ps.profiles
@@ -168,8 +169,8 @@ async def get_from_config(config,
                                             single_only=False,
                                             alias_map=alias_map)
 
-        inboxes = await profile_handler.get_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
-                                                     create_missing=True)
+        inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
+                                                      create_missing=True)
         inboxes = inboxes.profiles
         all_view = all_view + inboxes
 
@@ -288,13 +289,14 @@ class PrintEventHandler(EventHandler):
         self._nip5 = nip5
         super().__init__(event_acceptors)
 
-    async def _printer_event_if_nip5(self, evt: Event):
-        p: Profile = await self._profile_handler.get_profile(evt.pub_key)
+    async def _valid_nip5_event_pub(self, evt: Event) -> bool:
+        ret = False
+        p: Profile = await self._profile_handler.aget_profile(evt.pub_key)
         try:
-            if await self._nip_checker.is_valid_profile(p):
-                await self._printer.print_event(evt)
+            ret = await self._nip_checker.is_valid_profile(p)
         except NIP5Error as ne:
             logging.debug(f'PrintEventHandler::_printer_event_if_nip5 ignored event {evt.id} publisher has bad nip5')
+        return ret
 
     async def _profiles_prefetch(self, events: [Event]):
         ukeys = set()
@@ -302,8 +304,8 @@ class PrintEventHandler(EventHandler):
             ukeys.add(c_evt.pub_key)
             for c_tag in c_evt.p_tags:
                 ukeys.add(c_tag)
-        await self._profile_handler.get_profiles(list(ukeys),
-                                                 create_missing=True)
+        await self._profile_handler.aget_profiles(list(ukeys),
+                                                  create_missing=True)
 
     async def ado_event(self, the_client: Client, sub_id, evt: list[Event]|Event):
         c_evt: Event
@@ -328,12 +330,14 @@ class PrintEventHandler(EventHandler):
                 #   if pow is true and nip5 is false
                 #   if pow is false and nip5 is true and nip5 validates
                 #   if pow is true and nip5 is true and nip5 validates
-                if rating == 'good' or (self._pow is False and self._nip5 is False):
+
+                do_print = rating == 'good' or \
+                           (self._pow is False and self._nip5 is False) or \
+                           (self._pow and self._nip5 is False) or \
+                           (self._nip5 and await self._valid_nip5_event_pub(c_evt))
+
+                if do_print:
                     await self._printer.print_event(the_client, sub_id, c_evt)
-                elif self._pow and self._nip5 is False:
-                    await self._printer.print_event(the_client, sub_id, c_evt)
-                elif self._nip5:
-                    await self._printer_event_if_nip5(c_evt)
 
     async def astatus(self, status):
         await self._printer.astatus(status)
@@ -348,16 +352,18 @@ class JSONPrinter:
     async def print_event(self, the_client: Client, sub_id, evt: Event):
         await aioconsole.aprint(json.dumps(evt.event_data()))
 
-    async def astatus(self, status:str):
+    async def astatus(self, status: str):
         return
+
 
 class ContentPrinter:
     # output just the content of an event
     async def print_event(self, the_client: Client, sub_id, evt: Event):
         await aioconsole.aprint(evt.content)
 
-    async def astatus(self, status:str):
+    async def astatus(self, status: str):
         await aioconsole.aprint(status)
+
 
 def get_args() -> dict:
     """
@@ -390,6 +396,7 @@ def get_args() -> dict:
         'hashtag': None,
         'tags': None,
         'eid': None,
+        'start_mode': START_MODE,
         'output': OUTPUT,
         'ssl-disable-verify': None,
         'entities': False,
@@ -491,10 +498,15 @@ def get_cmdline_args(args) -> dict:
                         help='do not output event_id and pubkeys as nostr entities',
                         default=(not args['entities']), dest='entities')
     parser.add_argument('--nip5check', action='store_true',
-                        help='nip5 checked and displayed green if good',
+                        help='nip5 checked and displayed green if valid',
                         default=args['nip5check'])
     parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of as_user',
                         default=args['nip5'])
+    parser.add_argument('--start-mode', choices=['all', 'first'],
+                        default=args['start_mode'],
+                        help=f"""
+                                    at start wait for ALL relays to return events before starting to print or just FIRST 
+                                    default[{args['start_mode']}]""")
     parser.add_argument('-o', '--output', action='store', choices=['formatted', 'json', 'content'], default=args['output'],
                         help=f"""
                                         how to display events
@@ -620,11 +632,11 @@ async def print_run_info(relay,
 
             # this will group fetch all follow profiles so they won't be fetch individually
             # when we list
-            await profile_handler.get_profiles(pub_ks=as_user.contacts.follow_keys(),
-                                               create_missing=True)
+            await profile_handler.aget_profiles(pub_ks=as_user.contacts.follow_keys(),
+                                                create_missing=True)
 
             for f_k in as_user.contacts.follow_keys()[:10]:
-                c_p = await profile_handler.get_profile(f_k)
+                c_p = await profile_handler.aget_profile(f_k)
                 if c_p:
                     print(c_p.display_name())
                 else:
@@ -709,6 +721,9 @@ async def main(args):
     # sent from or to or both keys we've given
     direction = config['direction']
 
+    # on startup wait for all relys before starting printout?
+    start_mode = config['start_mode']
+
     # if this is true then output is just the json as we recieve ot
     output = config['output']
 
@@ -779,24 +794,25 @@ async def main(args):
                                  mention_eids=mention_eids,
                                  kinds=fetch_kinds,
                                  pow=pow,
-                                 nip5=nip5check,
+                                 nip5=nip5,
                                  direction=direction,
                                  hash_tag=hash_tag)
 
-    # show run info
-    await print_run_info(relay=relay,
-                         as_user=as_user,
-                         contacts=view_contacts,
-                         extra_view_profiles=extra_view_profiles,
-                         inboxes=inboxes,
-                         direction=direction,
-                         view_kinds=view_kinds,
-                         since=since,
-                         until=until,
-                         limit=limit,
-                         pow=pow,
-                         nip5=nip5,
-                         profile_handler=profile_handler)
+    # show run info except if we're outputting json
+    if output != 'json':
+        await print_run_info(relay=relay,
+                             as_user=as_user,
+                             contacts=view_contacts,
+                             extra_view_profiles=extra_view_profiles,
+                             inboxes=inboxes,
+                             direction=direction,
+                             view_kinds=view_kinds,
+                             since=since,
+                             until=until,
+                             limit=limit,
+                             pow=pow,
+                             nip5=nip5,
+                             profile_handler=profile_handler)
 
     def my_connect(the_client: Client):
         # so on reconnect we don't ask for everything again
@@ -866,26 +882,55 @@ async def main(args):
                                       pow=pow is not None,
                                       nip5=nip5)
 
-    # we end and reconnect - bit hacky but just makes thing easier to set in action
-    my_client.set_on_connect(my_connect)
+    """
+        if order_first, then we wait to get events from each relay and then order them as a single set
+        otherwise a slower relay returning later might make the events lookout of order date wise
+        (note that its always possible to get out of date events but normally they should come in
+        more or less forward in dates)
+        without order first events will start printing as soon as the fastest relay returns
+    """
 
-    # do a single query to get stored events that match, this allows us to sort
-    # it might be slower because we're waiting for all clients to return eose
-    # or atleast fail, but the output is less confusing timewise as before a fast relay
-    # might have returned all its events before another one that only has a few older events
-    # but these would have been the last shown
-    the_events = await my_client.query(filters=boot_e_filter,
-                                       do_event=last_event_track.do_event)
-    if limit:
+    the_events = []
+
+    async def print_inital_events():
+        await print_handler.ado_event(
+            the_client=None,
+            sub_id=None,
+            evt=the_events)
+
+        await my_printer.astatus('*** listening for more events ***')
+
+    if start_mode == 'all':
+        the_events = await my_client.query(filters=boot_e_filter,
+                                           do_event=last_event_track.do_event)
+
+        # because events may come from mutiple relays  sort
         Event.sort(the_events, inplace=True)
-        the_events = the_events[:limit]
 
-    await print_handler.ado_event(
-        the_client=None,
-        sub_id=None,
-        evt=the_events)
+        # merge from multiple relays means that we can get more events than the limit
+        # (different events from different relays - add opt to disable this force cut to limit?)
+        if limit:
+            the_events = the_events[:limit]
 
-    await my_printer.astatus('*** listening for more events ***')
+        await print_inital_events()
+
+    else:
+
+        def adhoc_do_event(the_client: Client, sub_id: str, events: [Event]):
+            nonlocal the_events
+            the_events = events
+            last_event_track.do_event(the_client, sub_id, events)
+
+        # note a fast relay might be giving us events before we get to this
+        # if that matters use wait_all True
+        def first_pull_complete():
+            asyncio.create_task(print_inital_events())
+
+        # TODO: fix client so that do event can be [handlers] and we wouldnt need adhoc_do_event
+        await my_client.query(filters=boot_e_filter,
+                              do_event=adhoc_do_event,
+                              on_complete=first_pull_complete,
+                              emulate_single=False)
 
     for c_client in my_client:
         my_client.set_on_eose(print_handler.do_event)

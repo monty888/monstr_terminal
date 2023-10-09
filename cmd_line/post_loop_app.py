@@ -137,8 +137,8 @@ class PostAppGui:
         self._msg_display_height = 0
         # prefetch all the profiles we'll need
         if self._profile_handler:
-            await self._profile_handler.get_profiles([c_m.pub_key for c_m in self._post_app.message_events],
-                                                     create_missing=True)
+            await self._profile_handler.aget_profiles([c_m.pub_key for c_m in self._post_app.message_events],
+                                                      create_missing=True)
 
         for c_m in self._post_app.message_events:
             content = c_m.content
@@ -170,8 +170,8 @@ class PostAppGui:
                 msg_height = len(content.split('\n'))
                 msg_profile = None
                 if self._profile_handler:
-                    msg_profile = await self._profile_handler.get_profile(c_m.pub_key,
-                                                                          create_missing=True)
+                    msg_profile = await self._profile_handler.aget_profile(c_m.pub_key,
+                                                                           create_missing=True)
 
                 prompt_user_text = util_funcs.str_tails(c_m.pub_key, 4)
                 if msg_profile:

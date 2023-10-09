@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 import json
 import hashlib
-from monstr.client.event_handlers import DeduplicateAcceptor, DuplicateContentAcceptor, NotOnlyNumbersAcceptor
+from monstr.client.event_handlers import DeduplicateAcceptor, NotOnlyNumbersAcceptor
 from monstr.encrypt import SharedEncrypt
 from monstr.event.event import Event
 from monstr.ident.profile import Profile

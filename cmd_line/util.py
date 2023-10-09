@@ -1,3 +1,4 @@
+import aioconsole
 from prompt_toolkit import print_formatted_text
 from prompt_toolkit.formatted_text import FormattedText
 from monstr.event.event import Event
@@ -7,87 +8,6 @@ from monstr.ident.profile import Profile, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import ProfileEventHandler
 from monstr.entities import Entities
 from monstr.util import util_funcs
-
-
-class EventPrinter:
-
-    def __init__(self,
-                 profile_handler: ProfileEventHandler,
-                 as_user: Profile = None,
-                 inbox_keys=None,
-                 share_keys=None,
-                 show_tags: [str] = None):
-
-        self._profile_handler = profile_handler
-        self._as_user = as_user
-        self._inbox_keys = inbox_keys
-        if inbox_keys is None:
-            self._inbox_keys = []
-        self._share_keys = share_keys
-        if share_keys is None:
-            self._share_keys = []
-
-    async def print_event(self, evt: Event):
-        await self.print_event_header(evt)
-        await self.print_event_content(evt)
-
-    async def _get_profile(self, key) -> Profile:
-        return (await self._profile_handler.get_profiles(pub_ks=key,
-                                                         create_missing=True))[0]
-
-    async def print_event_header(self,
-                           evt: Event,
-                           depth=0):
-        p: Profile
-
-        ret_arr = []
-        p = await self._profile_handler.get_profile(evt.pub_key,
-                                                    create_missing=True)
-
-        depth_align = ''.join(['\t'] * depth)
-        ret_arr.append('%s-- %s --' % (depth_align, p.display_name()))
-
-        # this will force fetch if needed all the profiles we need
-        # so that a fetch won't be made in the next loop for each p tag
-        await self._profile_handler.get_profiles(pub_ks=[pk for pk in evt.p_tags],
-                                                 create_missing=True)
-        to_list = []
-        for c_pk in evt.p_tags:
-            to_list.append((await self._profile_handler.get_profile(c_pk)).display_name())
-        if to_list:
-            ret_arr.append('%s-> %s' % (depth_align, to_list))
-
-        ret_arr.append('%s%s@%s' % (depth_align, evt.id, evt.created_at))
-
-        print('\n'.join(ret_arr))
-
-    async def print_event_content(self, evt: Event):
-
-        def nip_decode(the_evt: Event):
-            pub_key = evt.p_tags[0]
-            if pub_key == self._as_user.public_key:
-                pub_key = evt.pub_key
-
-            return evt.decrypted_content(self._as_user.private_key, pub_key)
-
-        if evt.kind == Event.KIND_TEXT_NOTE:
-            print(evt.content)
-        elif evt.kind == Event.KIND_ENCRYPT:
-            content = evt.content
-            try:
-                # basic NIP4 encrypted event from/to us
-                if evt.pub_key == self._as_user.public_key or self._as_user.public_key in evt.p_tags:
-                    content = nip_decode(evt)
-                # clust style wrapped NIP4 event
-                elif evt.pub_key in self._inbox_keys:
-                    evt = PostApp.clust_unwrap_event(evt, self._as_user, self._share_keys)
-                    if evt:
-                        await self.print_event_header(evt, depth=1)
-                        content = '\t' + nip_decode(evt)
-            except:
-                pass
-
-            print(content)
 
 
 class FormattedEventPrinter:
@@ -156,10 +76,14 @@ class FormattedEventPrinter:
         print_formatted_text(FormattedText(await self.get_event_content(evt)))
         print_formatted_text(FormattedText(await self.get_event_footer(evt)))
 
+    async def astatus(self, status: str):
+        # anything thats not the event
+        await aioconsole.aprint(status)
+
     async def _get_profile(self, key) -> Profile:
         # will error if key is not valid, doesn't break anything for us but maybe we should fix?
-        ret = (await self._profile_handler.get_profiles(pub_ks=key,
-                                                        create_missing=True))[0]
+        ret = (await self._profile_handler.aget_profiles(pub_ks=key,
+                                                         create_missing=True))[0]
         return ret
 
     def _is_user(self, key):
@@ -169,7 +93,7 @@ class FormattedEventPrinter:
         ret = False
         if self._as_user is not None:
             if not self._as_user.contacts_is_set():
-                await self._profile_handler.load_contacts(self._as_user)
+                await self._profile_handler.aload_contacts(self._as_user)
             ret = key in self._as_user.contacts.follow_keys()
 
         return ret
@@ -243,7 +167,7 @@ class FormattedEventPrinter:
 
         # this will force fetch if needed all the profiles we need
         # so that a fetch won't be made in the next loop for each p tag
-        await self._profile_handler.get_profiles(pub_ks=[pk for pk in evt.p_tags],
+        await self._profile_handler.aget_profiles(pub_ks=[pk for pk in evt.p_tags],
                                                  create_missing=True)
 
         for c_pk in evt.p_tags:
@@ -458,14 +382,6 @@ class FormattedEventPrinter:
 
         return txt_arr
 
-    # async def print_event_content(self, evt: Event):
-    #     style = ''
-    #     content, could_decode = await self._get_decode_event_content(evt)
-    #     if not could_decode:
-    #         style = 'gray'
-    #
-    #     print_formatted_text(FormattedText(await self.highlight_tags(content=content,
-    #                                                                  p_tags=evt.p_tags,
-    #                                                                  default_style=style)))
+
 
 

@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import sys
 from pathlib import Path
 import argparse
 from monstr.ident.profile import Profile
@@ -171,24 +170,24 @@ async def get_poster(client: Client,
         p_to_fetch = p_to_fetch + [inbox_k.public_key_hex()]
 
     # pre-fetch them, creating stubs for any we didn't find
-    await peh.get_profiles(pub_ks=p_to_fetch, create_missing=True)
+    await peh.aget_profiles(pub_ks=p_to_fetch, create_missing=True)
 
     # get the sending user profile
-    user_p = await peh.get_profile(pub_k=user_k.public_key_hex())
+    user_p = await peh.aget_profile(pub_k=user_k.public_key_hex())
     # because relay doesn't know the private key
     user_p.private_key = user_k.private_key_hex()
 
     # and for the inbox, normally we wouldn't expect this to have a profile
     inbox_p = None
     if inbox_k:
-        inbox_p = await peh.get_profile(inbox_k.public_key_hex())
+        inbox_p = await peh.aget_profile(inbox_k.public_key_hex())
         # again the relay wouldn't know this
         inbox_p.private_key = inbox_k.private_key_hex()
 
     # get the to users profile if any
     to_users_p = None
     if to_users_k:
-        to_users_p = await peh.get_profiles([k.public_key_hex() for k in to_users_k])
+        to_users_p = await peh.aget_profiles([k.public_key_hex() for k in to_users_k])
 
     post_app = PostApp(use_relay=client,
                        as_user=user_p,
@@ -223,6 +222,7 @@ async def post_single(relays: [str],
             auth_k = inbox_k
         the_client.auth(auth_k, challenge)
 
+
     async with ClientPool(relays, timeout=10, on_auth=on_auth) as client:
         post_env = await get_poster(client=client,
                                     user_k=user_k,
@@ -245,8 +245,8 @@ async def post_single(relays: [str],
                        public_inbox=inboxes,
                        msg=message,
                        kind=kind)
-
         post_app.do_post(msg=message)
+
         # hack to give time for the event to be sent
         await asyncio.sleep(1)
 
@@ -306,8 +306,8 @@ async def post_loop(relays: [str],
         # batch get authors otherwise requests would be fire 1 by 1 as needed
         # and the relay is likely to error us on number of subs
         async def do_events():
-            await peh.get_profiles(u_authors,
-                             create_missing=True)
+            await peh.aget_profiles(u_authors,
+                                    create_missing=True)
             for c_evt in evts:
                 post_app.do_event(the_client, sub_id, c_evt)
 
@@ -378,7 +378,7 @@ def get_cmdline_args(args) -> dict:
                                 default[{args["tags"]}]
     """)
     parser.add_argument('message', type=str, nargs='*',
-                       help='an integer for the accumulator')
+                       help='message to post')
     parser.add_argument('-k', '--kind', action='store', help='kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is True', type=int,
                         dest='kind')
     parser.add_argument('-f', '--format', action='store', help="""
