@@ -686,7 +686,7 @@ async def main(args):
     # start and connect relays
     my_client = ClientPool(relay, ssl=ssl)
     asyncio.create_task(my_client.run())
-    await my_client.wait_connect(timeout=10)
+    # await my_client.wait_connect(timeout=10,)
 
     profile_handler = NetworkedProfileEventHandler(client=my_client)
 
@@ -890,19 +890,11 @@ async def main(args):
         without order first events will start printing as soon as the fastest relay returns
     """
 
-    the_events = []
-
-    async def print_inital_events():
-        await print_handler.ado_event(
-            the_client=None,
-            sub_id=None,
-            evt=the_events)
-
-        await my_printer.astatus('*** listening for more events ***')
-
     if start_mode == 'all':
         the_events = await my_client.query(filters=boot_e_filter,
-                                           do_event=last_event_track.do_event)
+                                           do_event=last_event_track.do_event,
+                                           emulate_single=True,
+                                           wait_connect=False)
 
         # because events may come from mutiple relays  sort
         Event.sort(the_events, inplace=True)
@@ -912,24 +904,32 @@ async def main(args):
         if limit:
             the_events = the_events[:limit]
 
-        await print_inital_events()
+        await print_handler.ado_event(
+            the_client=None,
+            sub_id=None,
+            evt=the_events)
+
+        await my_printer.astatus('*** listening for more events ***')
 
     else:
 
         def adhoc_do_event(the_client: Client, sub_id: str, events: [Event]):
-            nonlocal the_events
-            the_events = events
+            # events drawn in and they're recieved from each relay (minus duplicates)
+            asyncio.create_task(print_handler.ado_event(
+                the_client=None,
+                sub_id=None,
+                evt=events))
             last_event_track.do_event(the_client, sub_id, events)
 
-        # note a fast relay might be giving us events before we get to this
-        # if that matters use wait_all True
+        # called at query completetion - which might not be until timeout if we have bad relays
         def first_pull_complete():
-            asyncio.create_task(print_inital_events())
+            asyncio.create_task(my_printer.astatus('*** listening for more events ***'))
 
         # TODO: fix client so that do event can be [handlers] and we wouldnt need adhoc_do_event
         await my_client.query(filters=boot_e_filter,
                               do_event=adhoc_do_event,
                               on_complete=first_pull_complete,
+                              wait_connect=True,
                               emulate_single=False)
 
     for c_client in my_client:
