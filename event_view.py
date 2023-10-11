@@ -17,7 +17,7 @@ from monstr.util import util_funcs
 from monstr.event.event import Event
 from monstr.encrypt import Keys
 from app.post import PostApp
-from cmd_line.util import FormattedEventPrinter
+from cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
 from util import ConfigError, load_toml
 
 # defaults if not otherwise given
@@ -45,13 +45,16 @@ UNTIL = None
 CONFIG_FILE = f'view.toml'
 # default output event kinds
 KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
+# kinds that will be treted as encrypted
+ENCRYPT_KINDS = f'{Event.KIND_ENCRYPT}'
 # for non contacts event must reach this pow to be output
 POW = None
 # wait for all relays before starting to output events?
 START_MODE = 'all'
 # how events should be output
 OUTPUT = 'formatted'
-
+# when to exit
+EXIT = 'never'
 
 def get_profiles_from_keys(keys: str,
                            private_only=False,
@@ -107,6 +110,7 @@ async def get_from_config(config,
     as_user: Profile = None
     all_view = []
     view_extra = []
+    view_contact = []
     inboxes = []
     inbox_keys = []
     shared_keys = []
@@ -142,7 +146,7 @@ async def get_from_config(config,
             if contacts:
                 contact_ps = await profile_handler.aget_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
                                                                  create_missing=True)
-
+                view_contact = contact_ps.profiles
                 all_view = all_view + contact_ps.profiles
 
     # addtional profiles to view other than current profile
@@ -172,16 +176,25 @@ async def get_from_config(config,
         inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
                                                       create_missing=True)
         inboxes = inboxes.profiles
+
         all_view = all_view + inboxes
 
-    if as_user is not None and as_user.private_key:
-        shared_keys = PostApp.get_clust_shared_keymap_for_profile(as_user, all_view)
 
-    # kind of events that'll we output
+    # check kinds and encrypt_kinds
     try:
-        kinds = {int(v) for v in str(config['kinds']).split(',')}
+        for k in {'kinds', 'encrypt_kinds'}:
+            v = config[k].lower()
+            # none is valid for encrypt kinds
+            if k == 'encrypt_kinds' and v == 'none':
+                kind_set = {}
+            else:
+                kind_set = {int(v) for v in v.split(',')}
+
+            # update in the config
+            config[k] = kind_set
     except ValueError as e:
-        raise ConfigError(f'kinds should be integer values got {config["kinds"]}')
+        print(e)
+        raise ConfigError(f'kinds should be integer values got {v}')
 
     if tags:
         if tags == 'none':
@@ -199,14 +212,14 @@ async def get_from_config(config,
     config.update({
         'as_user': as_user,
         'all_view': all_view,
+        'view_contact': view_contact,
         'view_extra': view_extra,
         'inboxes': inboxes,
         'inbox_keys': inbox_keys,
-        'shared_keys': shared_keys,
+        # 'shared_keys': shared_keys,
         'since': get_int_or_none(config['since'], 'since'),
         'until': get_int_or_none(config['until'], 'until'),
         'limit': get_int_or_none(config['limit'], 'limit'),
-        'kinds': kinds,
         'tags': tags
     })
     return config
@@ -277,7 +290,7 @@ class PrintEventHandler(EventHandler):
                  profile_handler: ProfileEventHandlerInterface = None,
                  printer=None,
                  classifier=None,
-                 nip5helper:NIP5Helper = None,
+                 nip5helper: NIP5Helper = None,
                  nip5=False,
                  pow=False):
 
@@ -337,7 +350,7 @@ class PrintEventHandler(EventHandler):
                            (self._nip5 and await self._valid_nip5_event_pub(c_evt))
 
                 if do_print:
-                    await self._printer.print_event(the_client, sub_id, c_evt)
+                    await self._printer.aprint_event(the_client, sub_id, c_evt)
 
     async def astatus(self, status):
         await self._printer.astatus(status)
@@ -345,24 +358,6 @@ class PrintEventHandler(EventHandler):
     def do_event(self, the_client: Client, sub_id, evt: Event):
         # client only supports sync do_event - maybe change?
         asyncio.create_task(self.ado_event(the_client, sub_id, evt))
-
-
-class JSONPrinter:
-    # outputs event in raw format
-    async def print_event(self, the_client: Client, sub_id, evt: Event):
-        await aioconsole.aprint(json.dumps(evt.event_data()))
-
-    async def astatus(self, status: str):
-        return
-
-
-class ContentPrinter:
-    # output just the content of an event
-    async def print_event(self, the_client: Client, sub_id, evt: Event):
-        await aioconsole.aprint(evt.content)
-
-    async def astatus(self, status: str):
-        await aioconsole.aprint(status)
 
 
 def get_args() -> dict:
@@ -388,6 +383,7 @@ def get_args() -> dict:
         'since': SINCE,
         'until': UNTIL,
         'kinds': KINDS,
+        'encrypt_kinds': ENCRYPT_KINDS,
         'pow': POW,
         'nip5': False,
         'nip5check': False,
@@ -400,12 +396,12 @@ def get_args() -> dict:
         'output': OUTPUT,
         'ssl-disable-verify': None,
         'entities': False,
+        'exit': EXIT,
         'debug': False,
     }
 
     # only done to get the work-dir and conf options if set
     ret.update(get_cmdline_args(ret))
-
     # now form config file if any
     ret.update(load_toml(ret['conf'], ret['work-dir']))
 
@@ -421,6 +417,7 @@ def get_args() -> dict:
         print('Required argument relay is missing. Use -r or --relay. ')
         exit(1)
     return ret
+
 
 def get_cmdline_args(args) -> dict:
     parser = argparse.ArgumentParser(
@@ -441,10 +438,10 @@ def get_cmdline_args(args) -> dict:
                         encrypted events will be left encrypted, 
                         default[{args['as-user']}]""")
     parser.add_argument('--contacts', action='store_true',
-                        help='if as_user lookup contacts and add to view',
+                        help='if --as-user lookup contacts and add to view',
                         default=args['contacts'])
     parser.add_argument('--no-contacts', action='store_false',
-                        help='if as user DO NOT add contacts to view',
+                        help='if --as-user DO NOT add contacts to view',
                         default=args['contacts'], dest='contacts')
     parser.add_argument('--view-extra', action='store', default=args['view-extra'],
                         help=f"""
@@ -468,6 +465,10 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                 comma separated event kinds to output,
                                 default[{args['kinds']}]""")
+    parser.add_argument('--encrypt-kinds', action='store', default=args['encrypt_kinds'],
+                        help=f"""
+                                    comma separated event kinds to be decrypted,
+                                    default[{args['encrypt_kinds']}]""")
     parser.add_argument('-l', '--limit', action='store', default=args['limit'],
                         help=f'max number of events to return, default [{args["limit"]}]')
     parser.add_argument('-s', '--since', action='store', default=args['since'],
@@ -512,12 +513,19 @@ def get_cmdline_args(args) -> dict:
                                         how to display events
                                         default[{args['output']}]""")
     parser.add_argument('--ssl-disable-verify', action='store_true', help='disables checks of ssl certificates')
+    # TODO add until option - if have until exit when we get event with timestamp >= that
+    parser.add_argument('-x', '--exit', action='store',
+                        default=args['exit'], choices=['never', 'store'],
+                        help=f"""
+                                            never - run indefinitely. store - exit after receiving stored events. 
+                                            default[{args['exit']}]""")
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
 
     ret = parser.parse_args()
     # so --as_user opt can be overridden empty if its defined in config file
     if ret.as_user and (ret.as_user == '' or ret.as_user.lower() == 'none'):
         ret.as_user = None
+
     return vars(ret)
 
 
@@ -707,6 +715,7 @@ async def main(args):
 
     # add add user contacts to view
     view_contacts = config['contacts']
+    view_contacts_profiles = config['view_contact']
 
     # extra profiles requested to view other than contacts of as_user or inboxes
     extra_view_profiles = config['view_extra']
@@ -714,9 +723,11 @@ async def main(args):
     # all view profiles, contains all pubks that we're going to request from relay to make our view
     view_profiles = config['all_view']
 
+
+
     inboxes = config['inboxes']
     inbox_keys = config['inbox_keys']
-    share_keys = config['shared_keys']
+    # share_keys = config['shared_keys']
 
     # sent from or to or both keys we've given
     direction = config['direction']
@@ -729,6 +740,9 @@ async def main(args):
 
     # the event kinds that we subscribe to and output
     view_kinds = config['kinds']
+
+    # the event kinds that we will decrypt
+    encrypt_kinds = config['encrypt_kinds']
 
     # bits of pow to events from any accounts we didn't request
     pow = config['pow']
@@ -777,6 +791,9 @@ async def main(args):
     # used to check that the events that we get back from relay match those we requested
     # the actual filter used is set when we add the filter in on_connect
     e_filter_acceptor = FilterAcceptor()
+
+    # exit mode
+    exit = config['exit']
 
     # just a wrap around get_event_filters so we don't have to call with all the
     # fields all the time
@@ -841,7 +858,10 @@ async def main(args):
 
     # actually does the outputting
     if output == 'json':
-        my_printer = JSONPrinter()
+        my_printer = JSONPrinter(as_user=as_user,
+                                 inbox_keys=inbox_keys,
+                                 view_keys=extra_view_profiles + view_contacts_profiles,
+                                 encrypted_kinds=encrypt_kinds)
     elif output == 'formatted':
         # by default we won't valid the nip5s for display
         fnip_check = None
@@ -851,13 +871,17 @@ async def main(args):
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
                                            as_user=as_user,
                                            inbox_keys=inbox_keys,
-                                           share_keys=share_keys,
+                                           view_keys=extra_view_profiles + view_contacts_profiles,
                                            show_pub_key=show_pubkey,
                                            show_tags=show_tags,
                                            entities=entities,
-                                           nip5helper=fnip_check)
+                                           nip5helper=fnip_check,
+                                           encrypted_kinds=encrypt_kinds)
     elif output == 'content':
-        my_printer = ContentPrinter()
+        my_printer = ContentPrinter(as_user=as_user,
+                                    inbox_keys=inbox_keys,
+                                    view_keys=extra_view_profiles + view_contacts_profiles,
+                                    encrypted_kinds=encrypt_kinds)
 
     # initial filter to get upto now
     boot_e_filter = my_get_event_filters(with_since=since)
@@ -889,7 +913,7 @@ async def main(args):
         more or less forward in dates)
         without order first events will start printing as soon as the fastest relay returns
     """
-
+    keep_running = True
     if start_mode == 'all':
         the_events = await my_client.query(filters=boot_e_filter,
                                            do_event=last_event_track.do_event,
@@ -909,7 +933,9 @@ async def main(args):
             sub_id=None,
             evt=the_events)
 
-        await my_printer.astatus('*** listening for more events ***')
+        keep_running = exit == 'never'
+        if keep_running:
+            await my_printer.astatus('*** listening for more events ***')
 
     else:
 
@@ -923,7 +949,10 @@ async def main(args):
 
         # called at query completetion - which might not be until timeout if we have bad relays
         def first_pull_complete():
-            asyncio.create_task(my_printer.astatus('*** listening for more events ***'))
+            nonlocal keep_running
+            keep_running = exit == 'never'
+            if keep_running:
+                asyncio.create_task(my_printer.astatus('*** listening for more events ***'))
 
         # TODO: fix client so that do event can be [handlers] and we wouldnt need adhoc_do_event
         await my_client.query(filters=boot_e_filter,
@@ -938,7 +967,7 @@ async def main(args):
         if c_client.connected:
             my_connect(c_client)
 
-    while True:
+    while keep_running:
         await asyncio.sleep(0.1)
     my_client.end()
 

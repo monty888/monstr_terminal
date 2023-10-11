@@ -8,9 +8,10 @@ if TYPE_CHECKING:
 import json
 import hashlib
 from monstr.client.event_handlers import DeduplicateAcceptor, NotOnlyNumbersAcceptor
-from monstr.encrypt import SharedEncrypt
+from monstr.encrypt import SharedEncrypt, Keys
 from monstr.event.event import Event
 from monstr.ident.profile import Profile
+
 
 
 class PostApp:
@@ -20,7 +21,21 @@ class PostApp:
         return hashlib.sha256(echd_key.encode()).hexdigest()
 
     @staticmethod
-    def get_clust_shared_keymap_for_profile(as_user: Profile, to_users: [] = None):
+    def _get_public_key_str(k_obj: [Profile | Keys | str]):
+        ret = k_obj
+        if isinstance(k_obj, Profile):
+            ret = k_obj.public_key
+        elif isinstance(k_obj, Keys):
+            ret = k_obj.public_key_hex()
+
+        if not Keys.is_hex_key(ret):
+            raise ValueError(f'{k_obj} unable to get nostr pub_k')
+
+        return ret
+
+    @staticmethod
+    def get_clust_shared_keymap_for_profile(as_user: [Profile | Keys | str],
+                                            to_users: [Profile | Keys | str] = None):
         """
         :param as_user: user profile that we're mapping shared keys for
         :param to_users: [] either of pubkeys or Profiles
@@ -30,13 +45,9 @@ class PostApp:
 
         ret = {PostApp.get_clust_shared(se.derive_shared_key(as_user.public_key)): as_user.public_key}
 
-        c_p: Profile
         if to_users:
-            for c_p in to_users:
-                for_key = c_p
-                if isinstance(for_key, Profile):
-                    for_key = c_p.public_key
-
+            for c_user in to_users:
+                for_key = PostApp._get_public_key_str(c_user)
                 ret[PostApp.get_clust_shared(se.derive_shared_key(for_key))] = for_key
 
         return ret

@@ -41,21 +41,22 @@ options:
   -r RELAY, --relay RELAY
                         comma separated nostr relays to connect to, default[None]
   -a AS_USER, --as-user AS_USER
-                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events
-                        will be left encrypted, default[None]
-  --contacts            if as_user lookup contacts and add to view
-  --no-contacts         if as user DO NOT add contacts to view
+                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4 encrypted events will be left
+                        encrypted, default[None]
+  --contacts            if --as-user lookup contacts and add to view
+  --no-contacts         if --as-user DO NOT add contacts to view
   --view-extra VIEW_EXTRA
                         additional comma separated alias, priv_k or pub_k of user to view, default[None]
-  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with
-                        wrapped events, default[None]
-  --direction {from,both,to}
-                        if query with author keys if we are looking for events sent from, sent to or both with those keys
-                        default[both]
-  -i EID, --id EID      comma separated event ids will be added as e tag filter e.g with kind=42 can be used to view a
-                        chat channel, default[None]
+  -v VIA, --via VIA     additional comma separated alias(with priv_k) or priv_k that will be used as public inbox with wrapped events,
+                        default[None]
+  --direction {both,to,from}
+                        if query with author keys if we are looking for events sent from, sent to or both with those keys default[both]
+  -i EID, --id EID      comma separated event ids will be added as e tag filter e.g with kind=42 can be used to view a chat channel,
+                        default[None]
   -k KINDS, --kinds KINDS
                         comma separated event kinds to output, default[1,4]
+  --encrypt-kinds ENCRYPT_KINDS
+                        comma separated event kinds to be decrypted, default[4]
   -l LIMIT, --limit LIMIT
                         max number of events to return, default [20]
   -s SINCE, --since SINCE
@@ -76,7 +77,10 @@ options:
   -o {formatted,json,content}, --output {formatted,json,content}
                         how to display events default[formatted]
   --ssl-disable-verify  disables checks of ssl certificates
+  -x {never,store}, --exit {never,store}
+                        never - run indefinitely. store - exit after receiving stored events. default[never]
   -d, --debug           enable debug output
+
 
 ```
 
