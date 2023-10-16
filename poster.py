@@ -496,10 +496,9 @@ async def main(args):
     # tags if any to be added to posts
     tags = args['tags']
 
-    # no kind given we'll choice base on format
+    # no kind given we'll choice based on format
     if kind is None:
         if format in {'encrypt', 'default'}:
-            is_encrypt = True
             kind = 4
         else:
             kind = 1
@@ -507,14 +506,17 @@ async def main(args):
     # a kind has been given, if format is default then selected based on kind
     else:
         if format == 'default':
-            is_encrypt = kind in {
+            is_encrypt = kind == 4
+            encrypted_kinds = {
                 4
             }
-
-    if is_encrypt:
-        encrypted_kinds = {
-            kind
-        }
+        elif format == 'plaintext':
+            encrypted_kinds = {}
+        else:
+            is_encrypt = True
+            encrypted_kinds = {
+                kind
+            }
 
     # file used to lookup aliases
     alias_file = args['alias_file']
