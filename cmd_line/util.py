@@ -465,6 +465,14 @@ class FormattedEventPrinter(WrappedEventPrinter):
                             'style': await self._get_pub_k_style(t_v)
                         }
 
+                        # add replacements for npub and nostr:npub
+                        if p.name:
+                            npub = Entities.encode('npub', p.public_key)
+                            replacements[f'nostr:{npub}'] = {
+                                'text': f' {p.display_name()} ',
+                                'style': await self._get_pub_k_style(t_v)
+                            }
+
                 replacements[f'#[{i}]'] = r_v
 
         for c_line in evt.content.splitlines():
