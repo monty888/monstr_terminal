@@ -23,7 +23,7 @@ class PostAppGui:
     def __init__(self,
                  post_app: PostApp,
                  profile_handler: ProfileEventHandlerInterface,
-                 encrypted_kinds: set = None):
+                 is_encrypt: bool = True):
         # gui parts
         self._post_app = post_app
         self._profile_handler = profile_handler
@@ -35,12 +35,8 @@ class PostAppGui:
         self._msg_display_height = 0
         self._draw_task = None
 
-        # event kinds to attempt to decrypt
-        self._encrypted_kinds = encrypted_kinds
-        if self._encrypted_kinds is None:
-            self._encrypted_kinds = {
-                Event.KIND_ENCRYPT
-            }
+        # will the events need decrypting?
+        self._is_encrypt = is_encrypt
 
     def _make_gui(self):
         kb = KeyBindings()
@@ -150,21 +146,22 @@ class PostAppGui:
             if not self._post_app.connection_status:
                 content_col = prompt_col = 'gray'
 
-            if c_m.kind in self._encrypted_kinds:
-                priv_key = as_user.private_key
-                use_pub_key = c_m.p_tags[0]
-
-                # its a message to us
-                if c_m.pub_key != as_user.public_key:
-                    use_pub_key = c_m.pub_key
+            if self._is_encrypt:
 
                 try:
+                    priv_key = as_user.private_key
+
+                    use_pub_key = c_m.p_tags[0]
+
+                    # its a message to us
+                    if c_m.pub_key != as_user.public_key:
+                        use_pub_key = c_m.pub_key
+
                     content = c_m.decrypted_content(priv_key, use_pub_key, check_kind=False)
                 except Exception as e:
                     # currently in the case of group messages we'd expect this except on those we create
                     # and the 1 msg that was encrypted for us... we can't tell which that is until we try to decrypt
-                    if c_m.pub_key == as_user.public_key:
-                        content = None
+                    content = None
 
             if content:
                 msg_height = len(content.split('\n'))
@@ -188,6 +185,7 @@ class PostAppGui:
                 self._msg_display_height += msg_height + 1
 
         self._msg_split_con.children = to_add
+
 
     async def run(self):
         await self._app.run_async()

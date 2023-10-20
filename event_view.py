@@ -3,22 +3,18 @@ import sys
 import signal
 import asyncio
 import argparse
-import json
 from pathlib import Path
 from datetime import datetime, timedelta
-import aioconsole
 from monstr.ident.profile import Profile, Contact, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, \
     NotOnlyNumbersAcceptor, EventHandler, LastEventHandler, FilterAcceptor
-from monstr.util import util_funcs
+from monstr.util import util_funcs, ConfigError
 from monstr.event.event import Event
-from monstr.encrypt import Keys
-from app.post import PostApp
 from cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
-from util import ConfigError, load_toml
+from util import load_toml, get_keys_from_str
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
@@ -56,45 +52,8 @@ OUTPUT = 'formatted'
 # when to exit
 EXIT = 'never'
 
-def get_profiles_from_keys(keys: str,
-                           private_only=False,
-                           single_only=False,
-                           alias_map: ProfileFileAlias = None) -> [Keys]:
-    """
-    :param alias_map:
-    :param keys:            , seperated nsec/npub
-    :param private_only:    only accept nsec
-    :param single_only:     only a single key
-    :return:
-    """
-    if single_only:
-        keys = [keys]
-    else:
-        keys = keys.split(',')
 
-    ret = []
-    for c_key in keys:
-        # maybe have flag to allow hex keys but for now just nsec/npub as it's so easy to leak the priv_k otherwise!
-        if Keys.is_bech32_key(c_key):
-            the_key = Keys.get_key(c_key)
-
-        # is it an alias?
-        elif alias_map:
-            p: Profile = alias_map.get_profile(c_key)
-            if p:
-                the_key = p.keys
-            else:
-                raise ConfigError('%s doesn\'t look like a nsec/npub nostr key or alias not found' % c_key)
-        else:
-            raise ConfigError('%s doesn\'t look like a nsec/npub nostr key' % c_key)
-
-        if private_only and the_key.private_key_hex() is None:
-            raise ConfigError('%s is not a private key' % c_key)
-        ret.append(the_key)
-    return ret
-
-
-def get_int_or_none(val: str, f_name: str) ->int:
+def get_int_or_none(val: str, f_name: str) -> int:
     ret = None
     try:
         if val is not None:
@@ -113,7 +72,6 @@ async def get_from_config(config,
     view_contact = []
     inboxes = []
     inbox_keys = []
-    shared_keys = []
     tags = config['tags']
     contacts = config['contacts']
 
@@ -122,10 +80,10 @@ async def get_from_config(config,
     alias_map = ProfileFileAlias(alias_file)
     # user we're viewing as
     if config['as_user'] is not None:
-        user_key = get_profiles_from_keys(config['as_user'],
-                                          private_only=False,
-                                          single_only=True,
-                                          alias_map=alias_map)[0]
+        user_key = get_keys_from_str(config['as_user'],
+                                     private_only=False,
+                                     single_only=True,
+                                     alias_map=alias_map)[0]
 
         as_user = await profile_handler.aget_profile(user_key.public_key_hex(),
                                                      create_missing=True)
@@ -151,10 +109,10 @@ async def get_from_config(config,
 
     # addtional profiles to view other than current profile
     if config['view_extra']:
-        view_keys = get_profiles_from_keys(config['view_extra'],
-                                           private_only=False,
-                                           single_only=False,
-                                           alias_map=alias_map)
+        view_keys = get_keys_from_str(config['view_extra'],
+                                      private_only=False,
+                                      single_only=False,
+                                      alias_map=alias_map)
 
         view_ps = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
                                                       create_missing=True)
@@ -168,17 +126,16 @@ async def get_from_config(config,
         # if as_user is None:
         #     raise ConfigException('inbox can only be used with as_user set')
 
-        inbox_keys = get_profiles_from_keys(config['via'],
-                                            private_only=True,
-                                            single_only=False,
-                                            alias_map=alias_map)
+        inbox_keys = get_keys_from_str(config['via'],
+                                       private_only=True,
+                                       single_only=False,
+                                       alias_map=alias_map)
 
         inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
                                                       create_missing=True)
         inboxes = inboxes.profiles
 
         all_view = all_view + inboxes
-
 
     # check kinds and encrypt_kinds
     try:
@@ -193,7 +150,6 @@ async def get_from_config(config,
             # update in the config
             config[k] = kind_set
     except ValueError as e:
-        print(e)
         raise ConfigError(f'kinds should be integer values got {v}')
 
     if tags:
@@ -216,7 +172,6 @@ async def get_from_config(config,
         'view_extra': view_extra,
         'inboxes': inboxes,
         'inbox_keys': inbox_keys,
-        # 'shared_keys': shared_keys,
         'since': get_int_or_none(config['since'], 'since'),
         'until': get_int_or_none(config['until'], 'until'),
         'limit': get_int_or_none(config['limit'], 'limit'),
@@ -714,20 +669,27 @@ async def main(args):
     as_user: Profile = config['as_user']
 
     # add add user contacts to view
+    c_p: Profile
     view_contacts = config['contacts']
     view_contacts_profiles = config['view_contact']
+    view_contacts_k = [c_p.keys for c_p in view_contacts_profiles]
 
     # extra profiles requested to view other than contacts of as_user or inboxes
     extra_view_profiles = config['view_extra']
+    extra_view_k = [c_p.keys for c_p in extra_view_profiles]
 
-    # all view profiles, contains all pubks that we're going to request from relay to make our view
+    # just the keys of above, in most cases the keys are all we want - this is what we pass into outputters
+    # for when they create the maps with inbox wrap events
+    # probably we could put all ks in and use the same as we use on teh main filter but probably its not necessary
+    # e.g. would you expect to use inbox and then look in that inbox for encrypted msgs with that inbox k?
+    # everyone who has teh inbox k could look into them anyway so why?
+    extra_and_contact_k = view_contacts_k + extra_view_k
+
+    # all view profiles, contains all pub_ks that we're going to request from relay to make our view
     view_profiles = config['all_view']
-
-
 
     inboxes = config['inboxes']
     inbox_keys = config['inbox_keys']
-    # share_keys = config['shared_keys']
 
     # sent from or to or both keys we've given
     direction = config['direction']
@@ -860,7 +822,7 @@ async def main(args):
     if output == 'json':
         my_printer = JSONPrinter(as_user=as_user,
                                  inbox_keys=inbox_keys,
-                                 view_keys=extra_view_profiles + view_contacts_profiles,
+                                 view_keys=extra_and_contact_k,
                                  encrypted_kinds=encrypt_kinds)
     elif output == 'formatted':
         # by default we won't valid the nip5s for display
@@ -871,7 +833,7 @@ async def main(args):
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
                                            as_user=as_user,
                                            inbox_keys=inbox_keys,
-                                           view_keys=extra_view_profiles + view_contacts_profiles,
+                                           view_keys=extra_and_contact_k,
                                            show_pub_key=show_pubkey,
                                            show_tags=show_tags,
                                            entities=entities,
@@ -880,7 +842,7 @@ async def main(args):
     elif output == 'content':
         my_printer = ContentPrinter(as_user=as_user,
                                     inbox_keys=inbox_keys,
-                                    view_keys=extra_view_profiles + view_contacts_profiles,
+                                    view_keys=extra_and_contact_k,
                                     encrypted_kinds=encrypt_kinds)
 
     # initial filter to get upto now

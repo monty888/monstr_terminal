@@ -8,6 +8,7 @@ from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
 from monstr.event.event import Event
 from app.post import PostApp
+from monstr.inbox import Inbox
 from cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
 from monstr.util import util_funcs, ConfigError
@@ -22,39 +23,6 @@ RELAYS = 'ws://localhost:8081'
 ALIAS_FILE = f'{WORK_DIR}profiles.csv'
 # config from toml file
 CONFIG_FILE = f'{WORK_DIR}poster.toml'
-
-
-def show_post_info(as_user: Profile,
-                   msg: str,
-                   to_users: [Profile],
-                   is_encrypt: bool,
-                   subject: str,
-                   public_inbox: Profile,
-                   kind):
-    if msg is None:
-        msg = '<no msg supplied>'
-    just = 10
-    print('from:'.rjust(just), as_user.display_name())
-    if to_users:
-        p: Profile
-        print('to:'.rjust(just), [p.display_name() for p in to_users])
-    if public_inbox:
-        print('via:'.rjust(just), public_inbox.display_name())
-
-    if subject:
-        print('subject:'.rjust(just), subject)
-
-    enc_text = 'encrypted'
-    if not is_encrypt:
-        enc_text = 'plain_text'
-    print('format:'.rjust(just), enc_text)
-    if kind not in {1, 4}:
-        print('kind :'.rjust(just), kind)
-
-
-    print('%s\n%s\n%s' % (''.join(['-'] * 10),
-                          msg,
-                          ''.join(['-'] * 10)))
 
 
 def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) -> Keys:
@@ -116,39 +84,6 @@ def get_to_keys(to_users: [str], ignore_missing: bool, alias_map: ProfileFileAli
     return ret
 
 
-def create_post_event(user: Keys,
-                      is_encrypt: bool,
-                      subject: str,
-                      to_users: [Keys],
-                      inbox: str,
-                      message: str):
-
-    kind = Event.KIND_ENCRYPT
-    if not is_encrypt:
-        kind = Event.KIND_TEXT_NOTE
-
-    ret = Event(kind=kind,
-                pub_key=user.public_key_hex(),
-                content=message)
-
-    if is_encrypt:
-        ret.content = ret.encrypt_content(priv_key=user.private_key_hex(),
-                                          pub_key=to_users[0].public_key_hex())
-
-    evt_tags = []
-    if subject:
-        evt_tags.append(['subject', subject])
-    if to_users:
-        evt_tags = evt_tags + [['p', k.public_key_hex()] for k in to_users]
-
-    ret.tags = evt_tags
-
-    if inbox:
-        pass
-
-    return ret
-
-
 async def get_poster(client: Client,
                      user_k: Keys,
                      to_users_k: Keys,
@@ -156,7 +91,7 @@ async def get_poster(client: Client,
                      is_encrypt: bool,
                      subject: str,
                      kind: int,
-                     tags: str):
+                     tags: str) -> PostApp:
     k: Keys
 
     # get profiles of from/to if we can
@@ -177,12 +112,20 @@ async def get_poster(client: Client,
     # because relay doesn't know the private key
     user_p.private_key = user_k.private_key_hex()
 
-    # and for the inbox, normally we wouldn't expect this to have a profile
-    inbox_p = None
+    # are we going via an inbox?
+    inbox = None
     if inbox_k:
-        inbox_p = await peh.aget_profile(inbox_k.public_key_hex())
-        # again the relay wouldn't know this
-        inbox_p.private_key = inbox_k.private_key_hex()
+        # attempt to get profile to give the ibox a name if it has one
+        inbox_p: Profile = await peh.aget_profile(inbox_k.public_key_hex())
+
+        # crete the inbox, this will be used to wrap messages before we post
+        inbox = Inbox(keys=inbox_k,
+                      name=inbox_p.display_name())
+
+        # generate share map for any encrypts over the inbox
+        if to_users_k:
+            inbox.set_share_map(for_keys=user_p.keys,
+                                to_keys=to_users_k)
 
     # get the to users profile if any
     to_users_p = None
@@ -192,18 +135,13 @@ async def get_poster(client: Client,
     post_app = PostApp(use_relay=client,
                        as_user=user_p,
                        to_users=to_users_p,
-                       public_inbox=inbox_p,
+                       inbox=inbox,
                        subject=subject,
                        is_encrypt=is_encrypt,
                        kind=kind,
                        tags=tags)
 
-    return {
-        'post_app': post_app,
-        'user': user_p,
-        'to_users': to_users_p,
-        'inboxes': inbox_p
-    }
+    return post_app
 
 
 async def post_single(relays: [str],
@@ -222,9 +160,8 @@ async def post_single(relays: [str],
             auth_k = inbox_k
         the_client.auth(auth_k, challenge)
 
-
     async with ClientPool(relays, timeout=10, on_auth=on_auth) as client:
-        post_env = await get_poster(client=client,
+        post_app = await get_poster(client=client,
                                     user_k=user_k,
                                     to_users_k=to_users_k,
                                     inbox_k=inbox_k,
@@ -233,19 +170,8 @@ async def post_single(relays: [str],
                                     kind=kind,
                                     tags=tags)
 
-        post_app: PostApp = post_env['post_app']
-        user: Profile = post_env['user']
-        to_users: [Profile] = post_env['to_users']
-        inboxes: [Profile] = post_env['inboxes']
-
-        show_post_info(as_user=user,
-                       to_users=to_users,
-                       is_encrypt=is_encrypt,
-                       subject=subject,
-                       public_inbox=inboxes,
-                       msg=message,
-                       kind=kind)
-        post_app.do_post(msg=message)
+        post_app.show_post_info(message)
+        post_app.do_post(message)
 
         # hack to give time for the event to be sent
         await asyncio.sleep(1)
@@ -258,8 +184,7 @@ async def post_loop(relays: [str],
                     is_encrypt: bool,
                     subject: str,
                     kind: int,
-                    tags: str,
-                    encrypted_kinds: set):
+                    tags: str):
 
     sub_id: str = None
     con_status = None
@@ -324,7 +249,7 @@ async def post_loop(relays: [str],
 
     async with ClientPool(relays, on_auth=on_auth) as my_client:
         peh = NetworkedProfileEventHandler(client=my_client)
-        post_env = await get_poster(client=my_client,
+        post_app = await get_poster(client=my_client,
                                     user_k=user_k,
                                     to_users_k=to_users_k,
                                     inbox_k=inbox_k,
@@ -333,10 +258,9 @@ async def post_loop(relays: [str],
                                     kind=kind,
                                     tags=tags)
 
-        post_app: PostApp = post_env['post_app']
         my_gui = PostAppGui(post_app,
                             profile_handler=peh,
-                            encrypted_kinds=encrypted_kinds)
+                            is_encrypt=is_encrypt)
 
         my_client.set_on_status(on_status)
         my_client.set_on_eose(on_eose)
@@ -486,37 +410,27 @@ async def main(args):
 
     # to encrypt event content or not
     format = args['format']
+    # if default we'll assume encrypt, but it might be overriden
     is_encrypt = format == 'encrypt'
-
     # kind of event to post by default this will be 1 for plaintxt or 4 for encrypt
     kind = args['kind']
-    # events to be treated as encrypted, none means default 4
-    encrypted_kinds = None
 
-    # tags if any to be added to posts
-    tags = args['tags']
-
-    # no kind given we'll choice based on format
+    # no kind given, so now we'll choose one, maybe overwrite is_encrypt
     if kind is None:
         if format in {'encrypt', 'default'}:
             kind = 4
+            is_encrypt = True
         else:
             kind = 1
-
-    # a kind has been given, if format is default then selected based on kind
+    # kind has been given, for format default we'll now override is_encrypt
     else:
+        # default which is encrypt only for kind 4
         if format == 'default':
             is_encrypt = kind == 4
-            encrypted_kinds = {
-                4
-            }
-        elif format == 'plaintext':
-            encrypted_kinds = {}
-        else:
-            is_encrypt = True
-            encrypted_kinds = {
-                kind
-            }
+
+
+    # tags if any to be added to posts
+    tags = args['tags']
 
     # file used to lookup aliases
     alias_file = args['alias_file']
@@ -559,8 +473,7 @@ async def main(args):
                         is_encrypt=is_encrypt,
                         subject=subject,
                         kind=kind,
-                        tags=tags,
-                        encrypted_kinds=encrypted_kinds
+                        tags=tags
                         )
 
 

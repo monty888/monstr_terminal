@@ -26,7 +26,7 @@ import logging
 import sys
 import argparse
 from pathlib import Path
-from util import ConfigError
+from monstr.util import ConfigError
 from monstr.ident.alias import ProfileFileAlias
 
 

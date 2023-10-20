@@ -5,7 +5,7 @@ from prompt_toolkit import print_formatted_text
 from prompt_toolkit.formatted_text import FormattedText
 from monstr.event.event import Event
 from monstr.encrypt import Keys
-from app.post import PostApp
+from monstr.inbox import Inbox
 from monstr.client.client import Client
 from monstr.ident.profile import Profile, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import ProfileEventHandler
@@ -86,12 +86,25 @@ class WrappedEventPrinter(EventPrinter):
         :param evt:
         :return:
         """
-        ret = evt
+        # copy the event so we're working on a new obj
+        ret = Event.from_JSON(evt.event_data())
+
+        content = None
         if self.event_needs_decrypt(evt):
-            try:
-                ret = evt.decrypt_nip4(evt, self._decrypt_keys, check_kind=False)
-            except Exception as e:
-                pass
+            # we'll try and decrypt with all p_tags, though the 0 tag should work for a standard encrypted evt
+            for c_p_tag in evt.p_tags:
+                try:
+                    content = evt.decrypted_content(priv_key=self._decrypt_keys.private_key_hex(),
+                                                    pub_key=c_p_tag,
+                                                    check_kind=False)
+
+                except Exception as e:
+                    pass
+
+                if content is not None:
+                    ret.content = content
+                    break
+
         return ret
 
     # print the event
@@ -105,53 +118,20 @@ class WrappedEventPrinter(EventPrinter):
         return
 
 
-class Inbox:
-
-    def __init__(self, keys: Keys, shared_keys_map: set = None):
-        self._keys = keys
-        self._shared_keys_map = {}
-        if shared_keys_map is not None:
-            self._shared_keys_map = shared_keys_map
-
-    @property
-    def view_key(self) -> str:
-        return self._keys.public_key_hex()
-
-    @property
-    def decrypt_key(self) -> str:
-        return self._keys.private_key_hex()
-
-    def unwrap_event(self, evt: Event, keys: Keys):
-        ret = None
-        shared_tags = evt.get_tags('shared')
-
-        if shared_tags and shared_tags[0][0] in self._shared_keys_map:
-            try:
-                content = evt.decrypted_content(keys.private_key_hex(), self._shared_keys_map[shared_tags[0][0]])
-                ret = Event.from_JSON(json.loads(content))
-            except Exception as e:
-                pass
-        else:
-            # is just a plain text in this inbox - anyone with the inboxes private key is able to see it
-            try:
-                content = evt.decrypted_content(self.decrypt_key, evt.pub_key)
-                ret = Event.from_JSON(json.loads(content))
-            except Exception as e:
-                pass
-
-        return ret
-
-
 def _create_inboxes(as_user: Profile,
-                    inbox_keys: [Profile | Keys | str] = None,
-                    view_keys: [Profile | Keys | str] = None) -> [Inbox]:
+                    inbox_keys: [Keys] = None,
+                    view_keys: [Keys | str] = None) -> [Inbox]:
     inboxes = []
     c_p: Profile
     if inbox_keys:
-        share_keys = PostApp.get_clust_shared_keymap_for_profile(as_user=as_user,
-                                                                 to_users=[c_p.keys for c_p in view_keys])
 
-        inboxes = [Inbox(k, share_keys) for k in inbox_keys]
+        for k in inbox_keys:
+            n_inbox = Inbox(keys=k)
+            # only possible with as user
+            if as_user:
+                n_inbox.set_share_map(for_keys=as_user.keys,
+                                      to_keys=view_keys)
+            inboxes.append(n_inbox)
 
     return {
         'inboxes': inboxes,
@@ -509,14 +489,15 @@ class FormattedEventPrinter(WrappedEventPrinter):
         return ret
 
     async def get_event_content(self, evt):
-
         txt_arr = []
         print_depth = 0
         print_style = 'gray'
         unwrapped_evt = self.get_unwrapped_event(evt)
         decrypted_evt = self.get_decrypted_event(unwrapped_evt)
         print_evt = evt
+        content_done = False
 
+        # FIXME - works but this logic is pretty crazy
         if self.event_needs_unwrap(evt):
             inbox_p: Profile = await self._get_profile(key=evt.pub_key)
             if evt.id != unwrapped_evt.id:
@@ -532,6 +513,14 @@ class FormattedEventPrinter(WrappedEventPrinter):
                     print_style = ''
                     print_evt = unwrapped_evt
 
+                txt_arr += await self.get_event_header(print_evt, depth=print_depth)
+                txt_arr += await self.highlight_tags(evt=print_evt,
+                                                     default_style=print_style,
+                                                     depth=print_depth)
+                txt_arr += await self.get_event_footer(evt=print_evt,
+                                                       depth=1)
+                content_done = True
+
             else:
                 txt_arr.append(('', f'\tunable to decrypt evt in inbox({inbox_p.display_name()})-->'))
 
@@ -544,9 +533,10 @@ class FormattedEventPrinter(WrappedEventPrinter):
             else:
                 print_style = ''
 
-        txt_arr += await self.highlight_tags(evt=print_evt,
-                                             default_style=print_style,
-                                             depth=print_depth)
+        if not content_done:
+            txt_arr += await self.highlight_tags(evt=print_evt,
+                                                 default_style=print_style,
+                                                 depth=print_depth)
 
         return txt_arr
 
