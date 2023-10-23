@@ -43,9 +43,9 @@ class WrappedEventPrinter(EventPrinter):
         if as_user and as_user.private_key is not None:
             self._decrypt_keys = as_user.keys
 
-        inboxes = _create_inboxes(as_user=as_user,
-                                  inbox_keys=inbox_keys,
-                                  view_keys=view_keys)
+        inboxes = self._create_inboxes(as_user=as_user,
+                                       inbox_keys=inbox_keys,
+                                       view_keys=view_keys)
 
         self._inboxes = inboxes['inboxes']
         self._inbox_view_keys = inboxes['inbox_view_keys']
@@ -55,6 +55,28 @@ class WrappedEventPrinter(EventPrinter):
         # by default nothing will be decrypted - probably at least want to set as {Event.KIND_ENCRYPT}
         if encrypted_kinds is not None:
             self._encrypted_kinds = encrypted_kinds
+
+    def _create_inboxes(self,
+                        as_user: Profile,
+                        inbox_keys: [Keys] = None,
+                        view_keys: [Keys | str] = None) -> [Inbox]:
+        inboxes = []
+        c_p: Profile
+        if inbox_keys:
+
+            for k in inbox_keys:
+                n_inbox = Inbox(keys=k)
+                # only possible with as user
+                if as_user:
+                    n_inbox.set_share_map(for_keys=as_user.keys,
+                                          to_keys=view_keys)
+                inboxes.append(n_inbox)
+
+        return {
+            'inboxes': inboxes,
+            'inbox_view_keys': {i.view_key for i in inboxes},
+            'inbox_decode_map': {i.view_key: i for i in inboxes}
+        }
 
     def event_needs_unwrap(self, evt: Event) -> bool:
         return evt.pub_key in self._inbox_view_keys
@@ -120,26 +142,7 @@ class WrappedEventPrinter(EventPrinter):
         return
 
 
-def _create_inboxes(as_user: Profile,
-                    inbox_keys: [Keys] = None,
-                    view_keys: [Keys | str] = None) -> [Inbox]:
-    inboxes = []
-    c_p: Profile
-    if inbox_keys:
 
-        for k in inbox_keys:
-            n_inbox = Inbox(keys=k)
-            # only possible with as user
-            if as_user:
-                n_inbox.set_share_map(for_keys=as_user.keys,
-                                      to_keys=view_keys)
-            inboxes.append(n_inbox)
-
-    return {
-        'inboxes': inboxes,
-        'inbox_view_keys': {i.view_key for i in inboxes},
-        'inbox_decode_map': {i.view_key: i for i in inboxes}
-    }
 
 
 class JSONPrinter(WrappedEventPrinter):
