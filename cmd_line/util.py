@@ -89,21 +89,23 @@ class WrappedEventPrinter(EventPrinter):
         # copy the event so we're working on a new obj
         ret = Event.from_JSON(evt.event_data())
 
-        content = None
         if self.event_needs_decrypt(evt):
-            # we'll try and decrypt with all p_tags, though the 0 tag should work for a standard encrypted evt
-            for c_p_tag in evt.p_tags:
+            # for the public key we'll try all p_tags and the events public key with
+            # are priv key, so we have a chance to decrypt non standard events also
+            # we just exit first time we don't cause exception
+            # (Like we produce from poster)
+            for c_p_tag in [evt.pub_key] + evt.p_tags:
                 try:
                     content = evt.decrypted_content(priv_key=self._decrypt_keys.private_key_hex(),
                                                     pub_key=c_p_tag,
                                                     check_kind=False)
 
+                    ret.content = content
+                    # if we got here then we manage to decrypt so exit
+                    break
+
                 except Exception as e:
                     pass
-
-                if content is not None:
-                    ret.content = content
-                    break
 
         return ret
 
