@@ -493,7 +493,8 @@ def get_event_filters(view_profiles: [Profile],
                       hash_tag: str,
                       pow: int,
                       nip5: bool,
-                      direction: str):
+                      direction: str,
+                      inboxes: [Profile]):
 
     ret = []
     watch_keys = []
@@ -525,6 +526,17 @@ def get_event_filters(view_profiles: [Profile],
     if not watch_keys or pow or nip5:
         ret.append({})
 
+    # for each inbox - we check for encryptkind(4) and pub_k, later we'll unwrap
+    # note the filter conditions only apply to the outer events
+    # on unwrapping they'd need to be checked again if you care that the inner event is within conditions
+    # (we do this for kinds, so only correct kinds in the wrap will be output)
+    if inboxes:
+        ret.append({
+            'kinds': [Event.KIND_ENCRYPT],
+            # inboxes are actually profile objs not inboxes here :(!
+            'authors': [c_p.public_key for c_p in inboxes]
+        })
+
     # add common filter paras to all filters
     for c_f in ret:
         # since and kinds always added
@@ -552,6 +564,7 @@ def get_event_filters(view_profiles: [Profile],
         ret.append({
             'ids': mention_eids
         })
+
 
     return ret
 
@@ -763,8 +776,6 @@ async def main(args):
         # sub for what we'll output to screen
         # TODO: not checked but I think if using inbox you always need to fetch type 4s
         fetch_kinds = list(view_kinds)
-        if inboxes and Event.KIND_ENCRYPT not in fetch_kinds:
-            fetch_kinds.append(Event.KIND_ENCRYPT)
 
         return get_event_filters(view_profiles=view_profiles,
                                  since=with_since,
@@ -775,7 +786,8 @@ async def main(args):
                                  pow=pow,
                                  nip5=nip5,
                                  direction=direction,
-                                 hash_tag=hash_tag)
+                                 hash_tag=hash_tag,
+                                 inboxes=inboxes)
 
     # show run info except if we're outputting json
     if output != 'json':
