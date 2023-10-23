@@ -137,7 +137,7 @@ class PostApp:
             # this can return None if we failed to unwrap event for whatever reason
             evt = self._inbox.unwrap_event(evt, self._as_user.keys)
 
-        if evt and self.accept_event(client, sub_id, evt):
+        if evt and self.accept_event(client, sub_id, evt) and evt.kind == self._kind:
             if self._is_chat(evt):
                 self._msg_events.append(evt)
                 if self._on_msg:

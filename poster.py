@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import sys
 from pathlib import Path
 import argparse
 from monstr.ident.profile import Profile

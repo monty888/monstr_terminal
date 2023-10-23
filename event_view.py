@@ -530,6 +530,8 @@ def get_event_filters(view_profiles: [Profile],
     # note the filter conditions only apply to the outer events
     # on unwrapping they'd need to be checked again if you care that the inner event is within conditions
     # (we do this for kinds, so only correct kinds in the wrap will be output)
+    # FIXME - inbox kinds is alway 4 which mean the events are always permanent add some way that we can say inbox
+    #  is on a different kind
     if inboxes:
         ret.append({
             'kinds': [Event.KIND_ENCRYPT],
@@ -539,8 +541,9 @@ def get_event_filters(view_profiles: [Profile],
 
     # add common filter paras to all filters
     for c_f in ret:
-        # since and kinds always added
-        c_f['kinds'] = kinds
+        # kinds addded unless we already added because its an inbox
+        if 'kinds' not in c_f:
+            c_f['kinds'] = kinds
 
         # other fields that may be added
         if limit:
@@ -564,7 +567,6 @@ def get_event_filters(view_profiles: [Profile],
         ret.append({
             'ids': mention_eids
         })
-
 
     return ret
 

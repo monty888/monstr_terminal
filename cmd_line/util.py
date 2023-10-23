@@ -142,9 +142,6 @@ class WrappedEventPrinter(EventPrinter):
         return
 
 
-
-
-
 class JSONPrinter(WrappedEventPrinter):
 
     def __init__(self,
