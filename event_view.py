@@ -1,3 +1,4 @@
+import json
 import logging
 import sys
 import signal
@@ -12,6 +13,8 @@ from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, \
     NotOnlyNumbersAcceptor, EventHandler, LastEventHandler, FilterAcceptor
 from monstr.util import util_funcs, ConfigError
+from monstr.inbox import Inbox
+from monstr.encrypt import Keys
 from monstr.event.event import Event
 from cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
 from util import load_toml, get_keys_from_str
@@ -43,6 +46,12 @@ CONFIG_FILE = f'view.toml'
 KINDS = f'{Event.KIND_TEXT_NOTE},{Event.KIND_ENCRYPT}'
 # kinds that will be treted as encrypted
 ENCRYPT_KINDS = f'{Event.KIND_ENCRYPT}'
+# kind that inbox events are expected to be on - currently all have to be on the same kind
+# so you'd need to run more than 1 viewer if you want to look into more than one inbox
+# and they're using different inbox kinds
+INBOX_KINDS = Event.KIND_ENCRYPT
+# show only events contained in inboxes (wrapped events)
+INBOX_ONLY = False
 # for non contacts event must reach this pow to be output
 POW = None
 # wait for all relays before starting to output events?
@@ -70,7 +79,6 @@ async def get_from_config(config,
     all_view = []
     view_extra = []
     view_contact = []
-    inboxes = []
     inbox_keys = []
     tags = config['tags']
     contacts = config['contacts']
@@ -130,9 +138,10 @@ async def get_from_config(config,
                                        private_only=True,
                                        single_only=False,
                                        alias_map=alias_map)
-
+        # look up inbox profiles, only done to see if they have a name other than using the pubk
         inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
                                                       create_missing=True)
+
         inboxes = inboxes.profiles
 
         all_view = all_view + inboxes
@@ -141,8 +150,11 @@ async def get_from_config(config,
     try:
         for k in {'kinds', 'encrypt_kinds'}:
             v = config[k].lower()
+            # * for kinds means any
+            if k == 'kinds' and v == '*':
+                kind_set = None
             # none is valid for encrypt kinds
-            if k == 'encrypt_kinds' and v == 'none':
+            elif k == 'encrypt_kinds' and v == 'none':
                 kind_set = {}
             else:
                 kind_set = {int(v) for v in v.split(',')}
@@ -170,7 +182,7 @@ async def get_from_config(config,
         'all_view': all_view,
         'view_contact': view_contact,
         'view_extra': view_extra,
-        'inboxes': inboxes,
+        # 'inboxes': inboxes,
         'inbox_keys': inbox_keys,
         'since': get_int_or_none(config['since'], 'since'),
         'until': get_int_or_none(config['until'], 'until'),
@@ -204,6 +216,7 @@ class MyClassifier:
     def _make_view_keys(self):
         c_c: Contact
         c_p: Profile
+        c_i: Inbox
 
         if self._as_user is not None:
             self._view_keys.append(self._as_user.public_key)
@@ -214,7 +227,7 @@ class MyClassifier:
             self._view_keys = self._view_keys + [c_p.public_key for c_p in self._view_profiles]
 
         if self._inboxes is not None:
-            self._view_keys = self._view_keys + [c_p.public_key for c_p in self._inboxes]
+            self._view_keys = self._view_keys + [c_i.view_key for c_i in self._inboxes]
 
     def classify(self, evt: Event):
         # we requested it but it might still be considered spam, we mark here
@@ -339,6 +352,8 @@ def get_args() -> dict:
         'until': UNTIL,
         'kinds': KINDS,
         'encrypt_kinds': ENCRYPT_KINDS,
+        'inbox_kinds': INBOX_KINDS,
+        'inbox_only': INBOX_ONLY,
         'pow': POW,
         'nip5': False,
         'nip5check': False,
@@ -369,8 +384,13 @@ def get_args() -> dict:
         logging.debug(f'get_args:: running with options - {ret}')
 
     if not ret['relay']:
-        print('Required argument relay is missing. Use -r or --relay. ')
+        print('Required argument relay is missing. Use -r or --relay')
         exit(1)
+
+    if ret['inbox_only'] and ret['via'] is None:
+        print('inbox-only is True bit no inbox defined user -v or --via')
+        sys.exit(1)
+
     return ret
 
 
@@ -424,6 +444,10 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                     comma separated event kinds to be decrypted,
                                     default[{args['encrypt_kinds']}]""")
+    parser.add_argument('--inbox-kinds', action='store', default=args['inbox_kinds'], type=int,
+                        help=f"""
+                                    kind to use for inbox events, applied to all inboxes
+                                    default[{args['inbox_kinds']}]""")
     parser.add_argument('-l', '--limit', action='store', default=args['limit'],
                         help=f'max number of events to return, default [{args["limit"]}]')
     parser.add_argument('-s', '--since', action='store', default=args['since'],
@@ -463,6 +487,11 @@ def get_cmdline_args(args) -> dict:
                         help=f"""
                                     at start wait for ALL relays to return events before starting to print or just FIRST 
                                     default[{args['start_mode']}]""")
+
+    parser.add_argument('--inbox-only', action='store_true', help='only show events that are contained in inboxes',
+                        default=args['inbox_only'])
+    parser.add_argument('--no-inbox-only', action='store_false', help='events in and outside of inboxes will be shown',
+                        default=args['inbox_only'])
     parser.add_argument('-o', '--output', action='store', choices=['formatted', 'json', 'content'], default=args['output'],
                         help=f"""
                                         how to display events
@@ -494,56 +523,56 @@ def get_event_filters(view_profiles: [Profile],
                       pow: int,
                       nip5: bool,
                       direction: str,
-                      inboxes: [Profile]):
+                      inboxes: [Inbox],
+                      inbox_only: bool):
 
     ret = []
     watch_keys = []
     c_p: Profile
+    c_i: Inbox
 
-    if view_profiles:
-        for c_p in view_profiles:
-            watch_keys.append(c_p.public_key)
+    # add the non-inbox view event filter
+    if inbox_only is False:
+        if view_profiles:
+            for c_p in view_profiles:
+                watch_keys.append(c_p.public_key)
 
-    # watch both from and mention for these keys
-    if watch_keys:
-        # events from accounts we follow, pow if any, not applied
-        if direction in {'both', 'from'}:
-            ret.append({
-                'authors': watch_keys
-            })
+        # watch both from and mention for these keys
+        if watch_keys:
+            # events from accounts we follow, pow if any, not applied
+            if direction in {'both', 'from'}:
+                ret.append({
+                    'authors': watch_keys
+                })
 
-        if direction in {'both', 'to'}:
+            if direction in {'both', 'to'}:
 
-            ret.append({
-                '#p': watch_keys
-            })
+                ret.append({
+                    '#p': watch_keys
+                })
 
-    # either not watching any particular authors or
-    # we're going to allow unrequested events through based on
-    # pow, nip5 or pow and nip5
-    # note in case of nip5 alone you have to fetch all events anyhow so
-    # probably best to use with at least a minimal pow
-    if not watch_keys or pow or nip5:
-        ret.append({})
+        # either not watching any particular authors or
+        # we're going to allow unrequested events through based on
+        # pow, nip5 or pow and nip5
+        # note in case of nip5 alone you have to fetch all events anyhow so
+        # probably best to use with at least a minimal pow
+        if not watch_keys or pow or nip5:
+            ret.append({})
 
-    # for each inbox - we check for encryptkind(4) and pub_k, later we'll unwrap
-    # note the filter conditions only apply to the outer events
-    # on unwrapping they'd need to be checked again if you care that the inner event is within conditions
-    # (we do this for kinds, so only correct kinds in the wrap will be output)
-    # FIXME - inbox kinds is alway 4 which mean the events are always permanent add some way that we can say inbox
-    #  is on a different kind
+    # add view into each inbox
     if inboxes:
         ret.append({
-            'kinds': [Event.KIND_ENCRYPT],
+            # all have to be on same kind
+            'kinds': [inboxes[0].kind],
             # inboxes are actually profile objs not inboxes here :(!
-            'authors': [c_p.public_key for c_p in inboxes]
+            'authors': [c_i.view_key for c_i in inboxes]
         })
 
     # add common filter paras to all filters
     for c_f in ret:
         # kinds addded unless we already added because its an inbox
-        if 'kinds' not in c_f:
-            c_f['kinds'] = kinds
+        if kinds is not None and 'kinds' not in c_f:
+            c_f['kinds'] = list(kinds)
 
         # other fields that may be added
         if limit:
@@ -590,6 +619,7 @@ async def print_run_info(relay,
                          extra_view_profiles,
                          inboxes,
                          view_kinds,
+                         encrypted_kinds,
                          since,
                          until,
                          limit,
@@ -597,9 +627,11 @@ async def print_run_info(relay,
                          nip5,
                          profile_handler,
                          direction,
+                         inbox_only,
                          ):
     c_p: Profile
     c_c: Contact
+    c_i: Inbox
     print(f'using relays {relay}')
 
     # output running info
@@ -633,11 +665,18 @@ async def print_run_info(relay,
             print(c_p.display_name())
 
     if inboxes:
-        print('--- checking inboxes ---')
-        for c_p in inboxes:
-            print(c_p.display_name())
+        print(f'--- checking inboxes using kind {inboxes[0].kind} ---')
+        for c_i in inboxes:
+            print(c_i.name)
 
-    filter_about = [f'showing events of kind {view_kinds}']
+    if view_kinds:
+        filter_about = [f'showing events of kind {view_kinds}']
+    else:
+        filter_about = [f'showing events of kind any']
+
+    if encrypted_kinds:
+        filter_about.append(f' encrypted kinds {encrypted_kinds}')
+
     now = datetime.now()
     if since is not None:
         filter_about.append(f' from {output_rel_date(now, since)}')
@@ -650,6 +689,8 @@ async def print_run_info(relay,
     print(''.join(filter_about))
 
     print(f'pow for non follows ({pow}) and nip5 check ({nip5}) direction ({direction})')
+    if inbox_only:
+        print('!! inbox only !!')
 
 
 async def main(args):
@@ -703,8 +744,36 @@ async def main(args):
     # all view profiles, contains all pub_ks that we're going to request from relay to make our view
     view_profiles = config['all_view']
 
-    inboxes = config['inboxes']
-    inbox_keys = config['inbox_keys']
+    # the event kinds that we subscribe to and output
+    view_kinds = config['kinds']
+
+    # the event kinds that we will decrypt (we only add those that appear in view kinds)
+    if view_kinds:
+        encrypt_kinds = config['encrypt_kinds'].intersection(view_kinds)
+    else:
+        encrypt_kinds = config['encrypt_kinds']
+
+    # the kind we'll use when looking for inbox events - same for all inboxes
+    inbox_kinds = config['inbox_kinds']
+    # in inbox only only events wrapped in given inboxes will be output
+    inbox_only = config['inbox_only']
+
+    # actually make into inbox objects
+    inboxes = []
+
+    inbox_keys: [Keys] = config['inbox_keys']
+    c_k: Keys
+    for c_k in inbox_keys:
+        n_inbox: Inbox = Inbox(keys=c_k,
+                               name=profile_handler.get_profile(c_k.public_key_hex()).display_name(),
+                               use_kind=inbox_kinds)
+        inboxes.append(n_inbox)
+
+    # now set share map on inboxes if so we can see/decrypt encrypted message in them
+    if as_user:
+        for c_i in inboxes:
+            c_i.set_share_map(for_keys=as_user.keys,
+                              to_keys=extra_and_contact_k)
 
     # sent from or to or both keys we've given
     direction = config['direction']
@@ -714,12 +783,6 @@ async def main(args):
 
     # if this is true then output is just the json as we recieve ot
     output = config['output']
-
-    # the event kinds that we subscribe to and output
-    view_kinds = config['kinds']
-
-    # the event kinds that we will decrypt
-    encrypt_kinds = config['encrypt_kinds']
 
     # bits of pow to events from any accounts we didn't request
     pow = config['pow']
@@ -775,21 +838,19 @@ async def main(args):
     # just a wrap around get_event_filters so we don't have to call with all the
     # fields all the time
     def my_get_event_filters(with_since):
-        # sub for what we'll output to screen
-        # TODO: not checked but I think if using inbox you always need to fetch type 4s
-        fetch_kinds = list(view_kinds)
 
         return get_event_filters(view_profiles=view_profiles,
                                  since=with_since,
                                  until=until,
                                  limit=limit,
                                  mention_eids=mention_eids,
-                                 kinds=fetch_kinds,
+                                 kinds=view_kinds,
                                  pow=pow,
                                  nip5=nip5,
                                  direction=direction,
                                  hash_tag=hash_tag,
-                                 inboxes=inboxes)
+                                 inboxes=inboxes,
+                                 inbox_only=inbox_only)
 
     # show run info except if we're outputting json
     if output != 'json':
@@ -800,12 +861,14 @@ async def main(args):
                              inboxes=inboxes,
                              direction=direction,
                              view_kinds=view_kinds,
+                             encrypted_kinds=encrypt_kinds,
                              since=since,
                              until=until,
                              limit=limit,
                              pow=pow,
                              nip5=nip5,
-                             profile_handler=profile_handler)
+                             profile_handler=profile_handler,
+                             inbox_only=inbox_only)
 
     def my_connect(the_client: Client):
         # so on reconnect we don't ask for everything again
@@ -835,8 +898,7 @@ async def main(args):
     # actually does the outputting
     if output == 'json':
         my_printer = JSONPrinter(as_user=as_user,
-                                 inbox_keys=inbox_keys,
-                                 view_keys=extra_and_contact_k,
+                                 inboxes=inboxes,
                                  encrypted_kinds=encrypt_kinds)
     elif output == 'formatted':
         # by default we won't valid the nip5s for display
@@ -846,17 +908,16 @@ async def main(args):
 
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
                                            as_user=as_user,
-                                           inbox_keys=inbox_keys,
-                                           view_keys=extra_and_contact_k,
+                                           inboxes=inboxes,
                                            show_pub_key=show_pubkey,
                                            show_tags=show_tags,
                                            entities=entities,
                                            nip5helper=fnip_check,
+                                           kinds=view_kinds,
                                            encrypted_kinds=encrypt_kinds)
     elif output == 'content':
         my_printer = ContentPrinter(as_user=as_user,
-                                    inbox_keys=inbox_keys,
-                                    view_keys=extra_and_contact_k,
+                                    inboxes=inboxes,
                                     encrypted_kinds=encrypt_kinds)
 
     # initial filter to get upto now
@@ -901,7 +962,7 @@ async def main(args):
 
         # merge from multiple relays means that we can get more events than the limit
         # (different events from different relays - add opt to disable this force cut to limit?)
-        if limit:
+        if limit is not None:
             the_events = the_events[:limit]
 
         await print_handler.ado_event(

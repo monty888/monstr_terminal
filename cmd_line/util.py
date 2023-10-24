@@ -33,8 +33,10 @@ class WrappedEventPrinter(EventPrinter):
     """
     def __init__(self,
                  as_user: Profile = None,
-                 inbox_keys: [Profile | Keys | str] = None,
-                 view_keys: [Profile | Keys | str] = None,
+                 inboxes: [Inbox] = None,
+                 # kinds to output - probably a filter would be more flexible here... None will not restrict at all
+                 kinds: {int} = None,
+                 # kinds that we'll be decrypted
                  encrypted_kinds: {int} = None
                  ):
 
@@ -43,40 +45,40 @@ class WrappedEventPrinter(EventPrinter):
         if as_user and as_user.private_key is not None:
             self._decrypt_keys = as_user.keys
 
-        inboxes = self._create_inboxes(as_user=as_user,
-                                       inbox_keys=inbox_keys,
-                                       view_keys=view_keys)
+        self._inboxes = inboxes
+        # lookups for dealing with inboxes
+        c_i: Inbox
+        self._inbox_view_keys = {c_i.view_key for c_i in inboxes}
+        self._inbox_decode_map = {c_i.view_key: c_i for c_i in inboxes}
 
-        self._inboxes = inboxes['inboxes']
-        self._inbox_view_keys = inboxes['inbox_view_keys']
-        self._inbox_decode_map = inboxes['inbox_decode_map']
+        self._kinds = kinds
+
         self._encrypted_kinds = {}
-
         # by default nothing will be decrypted - probably at least want to set as {Event.KIND_ENCRYPT}
         if encrypted_kinds is not None:
             self._encrypted_kinds = encrypted_kinds
 
-    def _create_inboxes(self,
-                        as_user: Profile,
-                        inbox_keys: [Keys] = None,
-                        view_keys: [Keys | str] = None) -> [Inbox]:
-        inboxes = []
-        c_p: Profile
-        if inbox_keys:
-
-            for k in inbox_keys:
-                n_inbox = Inbox(keys=k)
-                # only possible with as user
-                if as_user:
-                    n_inbox.set_share_map(for_keys=as_user.keys,
-                                          to_keys=view_keys)
-                inboxes.append(n_inbox)
-
-        return {
-            'inboxes': inboxes,
-            'inbox_view_keys': {i.view_key for i in inboxes},
-            'inbox_decode_map': {i.view_key: i for i in inboxes}
-        }
+    # def _create_inboxes(self,
+    #                     as_user: Profile,
+    #                     inbox_keys: [Keys] = None,
+    #                     view_keys: [Keys | str] = None) -> [Inbox]:
+    #     inboxes = []
+    #     c_p: Profile
+    #     if inbox_keys:
+    #
+    #         for k in inbox_keys:
+    #             n_inbox = Inbox(keys=k)
+    #             # only possible with as user
+    #             if as_user:
+    #                 n_inbox.set_share_map(for_keys=as_user.keys,
+    #                                       to_keys=view_keys)
+    #             inboxes.append(n_inbox)
+    #
+    #     return {
+    #         'inboxes': inboxes,
+    #         'inbox_view_keys': {i.view_key for i in inboxes},
+    #         'inbox_decode_map': {i.view_key: i for i in inboxes}
+    #     }
 
     def event_needs_unwrap(self, evt: Event) -> bool:
         return evt.pub_key in self._inbox_view_keys
@@ -91,11 +93,13 @@ class WrappedEventPrinter(EventPrinter):
         :param evt:
         :return:
         """
+
         ret = evt
         if self.event_needs_unwrap(evt):
             unwrapped_evt = self._inbox_decode_map[evt.pub_key].unwrap_event(evt, self._decrypt_keys)
             if unwrapped_evt:
                 ret = unwrapped_evt
+
         return ret
 
     def event_needs_decrypt(self, evt: Event) -> bool:
@@ -131,6 +135,11 @@ class WrappedEventPrinter(EventPrinter):
 
         return ret
 
+    # will we output the event? This probably is mainly useful if dealing with wrapped events
+    # where we may want to check again that they pass some filter after unwrapping
+    def output_event(self, evt: Event) -> bool:
+        return self._kinds is None or evt.kind in self._kinds
+
     # print the event
     async def aprint_event(self, the_client: Client, sub_id, evt: Event):
         # you probably want to override this
@@ -146,22 +155,22 @@ class JSONPrinter(WrappedEventPrinter):
 
     def __init__(self,
                  as_user: Profile = None,
-                 inbox_keys: [Profile | Keys | str] = None,
-                 view_keys: [Profile | Keys | str] = None,
+                 inboxes: [Inbox] = None,
+                 kinds=None,
                  encrypted_kinds: set = None
                  ):
 
         super().__init__(as_user=as_user,
-                         inbox_keys=inbox_keys,
-                         view_keys=view_keys,
+                         inboxes=inboxes,
                          encrypted_kinds=encrypted_kinds)
 
     # outputs event in raw format
     async def aprint_event(self, the_client: Client, sub_id, evt: Event):
         # unwrap and decrypt event as required - if unable or uneeded left as is
         evt = self.get_unwrapped_event(evt)
-        evt = self.get_decrypted_event(evt)
-        await aioconsole.aprint(json.dumps(evt.event_data()))
+        if self.output_event(evt):
+            evt = self.get_decrypted_event(evt)
+            await aioconsole.aprint(json.dumps(evt.event_data()))
 
     async def astatus(self, status: str):
         return
@@ -171,23 +180,24 @@ class ContentPrinter(WrappedEventPrinter):
 
     def __init__(self,
                  as_user: Profile = None,
-                 inbox_keys: [Profile | Keys | str] = None,
-                 view_keys: [Profile | Keys | str] = None,
+                 inboxes: [Inbox] = None,
+                 kinds=None,
                  encrypted_kinds: set = None
                  ):
 
         super().__init__(as_user=as_user,
-                         inbox_keys=inbox_keys,
-                         view_keys=view_keys,
+                         inboxes=inboxes,
+                         kinds=kinds,
                          encrypted_kinds=encrypted_kinds)
 
     # output just the content of an event
     async def aprint_event(self, the_client: Client, sub_id, evt: Event):
         # unwrap and decrypt event as required - if unable or uneeded left as is
         evt = self.get_unwrapped_event(evt)
-        evt = self.get_decrypted_event(evt)
-        content = evt.content
-        await aioconsole.aprint(content)
+        if self.output_event(evt):
+            evt = self.get_decrypted_event(evt)
+            content = evt.content
+            await aioconsole.aprint(content)
 
     async def astatus(self, status: str):
         await aioconsole.aprint(status)
@@ -198,12 +208,12 @@ class FormattedEventPrinter(WrappedEventPrinter):
     def __init__(self,
                  profile_handler: ProfileEventHandler,
                  as_user: Profile = None,
-                 inbox_keys: [Profile | Keys | str] = None,
-                 view_keys: [Profile | Keys | str] = None,
+                 inboxes: [Inbox] = None,
                  show_pub_key: bool = False,
                  show_tags: [str] = None,
                  entities: bool = False,
                  nip5helper: NIP5Helper = None,
+                 kinds=None,
                  encrypted_kinds=None):
 
         self._profile_handler = profile_handler
@@ -238,14 +248,19 @@ class FormattedEventPrinter(WrappedEventPrinter):
             self._encrypted_kinds = {Event.KIND_ENCRYPT}
 
         super().__init__(as_user=as_user,
-                         inbox_keys=inbox_keys,
-                         view_keys=view_keys,
+                         inboxes=inboxes,
+                         kinds=kinds,
                          encrypted_kinds=encrypted_kinds)
 
     async def aprint_event(self, the_client: Client, sub_id, evt: Event):
-        print_formatted_text(FormattedText(await self.get_event_header(evt)))
-        print_formatted_text(FormattedText(await self.get_event_content(evt)))
-        print_formatted_text(FormattedText(await self.get_event_footer(evt)))
+        unwrapped_evt = evt
+        if self.event_needs_unwrap(evt):
+            unwrapped_evt = self.get_unwrapped_event(evt)
+
+        if self.output_event(unwrapped_evt):
+            print_formatted_text(FormattedText(await self.get_event_header(evt)))
+            print_formatted_text(FormattedText(await self.get_event_content(evt, unwrapped_evt)))
+            print_formatted_text(FormattedText(await self.get_event_footer(evt)))
 
     async def astatus(self, status: str):
         # anything thats not the event
@@ -498,11 +513,10 @@ class FormattedEventPrinter(WrappedEventPrinter):
 
         return ret
 
-    async def get_event_content(self, evt):
+    async def get_event_content(self, evt, unwrapped_evt):
         txt_arr = []
         print_depth = 0
         print_style = 'gray'
-        unwrapped_evt = self.get_unwrapped_event(evt)
         decrypted_evt = self.get_decrypted_event(unwrapped_evt)
         print_evt = evt
         content_done = False
