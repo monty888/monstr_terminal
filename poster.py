@@ -24,6 +24,8 @@ RELAYS = 'ws://localhost:8081'
 ALIAS_FILE = f'{WORK_DIR}profiles.csv'
 # config from toml file
 CONFIG_FILE = f'{WORK_DIR}poster.toml'
+# default kind for inbox wrap events
+INBOX_KIND = Event.KIND_ENCRYPT
 
 
 def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) -> Keys:
@@ -89,6 +91,7 @@ async def get_poster(client: Client,
                      user_k: Keys,
                      to_users_k: Keys,
                      inbox_k: Keys,
+                     inbox_kind: int,
                      is_encrypt: bool,
                      subject: str,
                      kind: int,
@@ -116,17 +119,11 @@ async def get_poster(client: Client,
     # are we going via an inbox?
     inbox = None
     if inbox_k:
-        # attempt to get profile to give the ibox a name if it has one
-        inbox_p: Profile = await peh.aget_profile(inbox_k.public_key_hex())
-
-        # crete the inbox, this will be used to wrap messages before we post
-        inbox = Inbox(keys=inbox_k,
-                      name=inbox_p.display_name())
-
-        # generate share map for any encrypts over the inbox
-        if to_users_k:
-            inbox.set_share_map(for_keys=user_p.keys,
-                                to_keys=to_users_k)
+        inbox = await get_inbox(keys=inbox_k,
+                                for_keys=user_k,
+                                to_keys=to_users_k,
+                                inbox_kind=inbox_kind,
+                                profile_handler=peh)
 
     # get the to users profile if any
     to_users_p = None
@@ -145,10 +142,38 @@ async def get_poster(client: Client,
     return post_app
 
 
+async def get_inbox(keys: Keys,
+                    for_keys: Keys,
+                    to_keys: [Keys],
+                    inbox_kind: int,
+                    profile_handler: NetworkedProfileEventHandler=None) -> Inbox:
+    # are we going via an inbox?
+    ret = None
+    name = util_funcs.str_tails(keys.public_key_hex())
+
+    # if given a profile handler we'll attempt to get a name for the inbox (from meta event)
+    if profile_handler is not None:
+        inbox_p: Profile = await profile_handler.aget_profile(keys.public_key_hex())
+        name = inbox_p.display_name()
+
+    # actually create the inbox
+    ret = Inbox(keys=keys,
+                name=name,
+                use_kind=inbox_kind)
+
+    # generate share map for any encrypts over the inbox
+    if to_keys:
+        ret.set_share_map(for_keys=for_keys,
+                          to_keys=to_keys)
+
+    return ret
+
+
 async def post_single(relays: [str],
                       user_k: Keys,
                       to_users_k: Keys,
                       inbox_k: Keys,
+                      inbox_kind: int,
                       is_encrypt: bool,
                       subject: str,
                       message: str,
@@ -166,6 +191,7 @@ async def post_single(relays: [str],
                                     user_k=user_k,
                                     to_users_k=to_users_k,
                                     inbox_k=inbox_k,
+                                    inbox_kind=inbox_kind,
                                     is_encrypt=is_encrypt,
                                     subject=subject,
                                     kind=kind,
@@ -182,6 +208,7 @@ async def post_loop(relays: [str],
                     user_k: Keys,
                     to_users_k: Keys,
                     inbox_k: Keys,
+                    inbox_kind: int,
                     is_encrypt: bool,
                     subject: str,
                     kind: int,
@@ -192,22 +219,16 @@ async def post_loop(relays: [str],
 
     # if we're using an inbox then events are always encrypted type 4
     # though they may be unencrypted to anyone who has the inbox keys
-
-
     def do_sub():
         nonlocal sub_id
 
-        # if inbox then we're always looking for kind4, the actually events we want are wrapped inside that
-        f_kind = kind
-        if inbox_k:
-            f_kind = Event.KIND_ENCRYPT
-
         filter = {
-            'kinds': [f_kind],
+            'kinds': [kind],
             'limit': 10
         }
         if inbox_k:
-            filter['authors'] = inbox_k.public_key_hex()
+            filter['authors'] = [inbox_k.public_key_hex()]
+            filter['kinds'] = [inbox_kind]
 
         # can only be applied on non wrapped, otherwise needs to be filtered by post app
         if subject and inbox_k is None:
@@ -254,6 +275,7 @@ async def post_loop(relays: [str],
                                     user_k=user_k,
                                     to_users_k=to_users_k,
                                     inbox_k=inbox_k,
+                                    inbox_kind=inbox_kind,
                                     is_encrypt=is_encrypt,
                                     subject=subject,
                                     kind=kind,
@@ -280,19 +302,19 @@ def get_cmdline_args(args) -> dict:
             """
     )
     parser.add_argument('-r', '--relay', action='store', default=args['relay'],
-                        help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
+                        help=f'comma separated nostr relays to connect to, default [{args["relay"]}]')
     parser.add_argument('-a', '--as_user', action='store', default=args['as_user'],
                         help=f"""
                         alias, priv_k of user to post as,
-                        default[{args['as_user']}]""")
+                        default [{args['as_user']}]""")
     parser.add_argument('-t', '--to_users', action='store', default=args['to_users'],
                         help=f"""
                         comma seperated alias, priv_k, or pub_k of user to post to,
-                        default[{args['to_users']}]""")
+                        default [{args['to_users']}]""")
     parser.add_argument('-v', '--via', action='store', default=args['via'],
                         help=f"""
                             alias(with priv_k) or nsec that will be used as public inbox with wrapped events,
-                            default[{args['via']}]""")
+                            default [{args['via']}]""")
     parser.add_argument('-s', '--subject', action='store', default=args['subject'],
                         help=f"""
                                 add subject tag to post,,
@@ -300,12 +322,20 @@ def get_cmdline_args(args) -> dict:
     parser.add_argument('--tags', action='store', default=args['tags'],
                         help=f"""
                                 tags to add post in format tagname:v1,v2#tagname:v1...
-                                default[{args["tags"]}]
+                                default [{args["tags"]}]
     """)
     parser.add_argument('message', type=str, nargs='*',
                        help='message to post')
-    parser.add_argument('-k', '--kind', action='store', help='kind of event to post, if not given default is 1 if plaintext or 4 if encrypt is True', type=int,
+    parser.add_argument('-k', '--kind', action='store', help="""
+                                kind of event to post, if not given used kind depends on format -
+                                if default or plaintext then [1] if encrypt then [4]"""
+                        , type=int,
                         dest='kind')
+    parser.add_argument('--inbox-kind', action='store',
+                        help=f'if using an inbox, what kind is used for the wrapping event default [{args["inbox_kind"]}]',
+                        type=int,default=int(args["inbox_kind"]),
+                        dest='inbox_kind')
+
     parser.add_argument('-f', '--format', action='store', help="""
     format of the event content if default is selected then events of kind 4 will be encrypted and all other kinds will 
     be plaintext
@@ -323,6 +353,7 @@ def get_cmdline_args(args) -> dict:
 
     return vars(ret)
 
+
 def get_tags(tags:str)->[[]]:
     ret = None
     for c_tag in tags.split('#'):
@@ -336,6 +367,7 @@ def get_tags(tags:str)->[[]]:
 
     logging.debug(f'get_tags: got tag values {ret}')
     return ret
+
 
 def get_args() -> dict:
     """
@@ -354,6 +386,7 @@ def get_args() -> dict:
         'via': None,
         'format': 'default',
         'kind': None,
+        'inbox_kind': INBOX_KIND,
         'ignore_missing': False,
         'subject': None,
         'tags': None,
@@ -396,6 +429,7 @@ async def main(args):
 
     # msgs wrapped via this in box (priv key that we know and so should those we post to)
     inbox = args['via']
+    inbox_kind = args['inbox_kind']
 
     # don't fail just because we can't find all to_users
     ignore_missing = args['ignore_missing']
@@ -429,7 +463,6 @@ async def main(args):
         if format == 'default':
             is_encrypt = kind == 4
 
-
     # tags if any to be added to posts
     tags = args['tags']
 
@@ -460,6 +493,7 @@ async def main(args):
                           user_k=user_keys,
                           to_users_k=to_keys,
                           inbox_k=inbox_keys,
+                          inbox_kind=inbox_kind,
                           is_encrypt=is_encrypt,
                           subject=subject,
                           message=message,
@@ -471,6 +505,7 @@ async def main(args):
                         user_k=user_keys,
                         to_users_k=to_keys,
                         inbox_k=inbox_keys,
+                        inbox_kind=inbox_kind,
                         is_encrypt=is_encrypt,
                         subject=subject,
                         kind=kind,

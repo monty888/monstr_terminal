@@ -151,7 +151,6 @@ class PostApp:
             self._client.publish(evt)
 
     def show_post_info(self, msg: str=None):
-        print('show info')
         if msg is None:
             msg = '<no msg supplied>'
         just = 10
@@ -232,29 +231,6 @@ class PostApp:
             pass
 
         return post
-
-    # def _inbox_wrap(self, evt, to_pub_k=None):
-    #     tags = []
-    #     if to_pub_k:
-    #         se = SharedEncrypt(self._as_user.private_key)
-    #         se.derive_shared_key(to_pub_k)
-    #         tags = [
-    #                 ['shared', PostApp.get_clust_shared(se.shared_key())]
-    #         ]
-    #
-    #     evt = Event(kind=Event.KIND_ENCRYPT,
-    #                 content=json.dumps(evt.event_data()),
-    #                 pub_key=self._public_inbox.public_key,
-    #                 tags=tags)
-    #     # evt.content = evt.encrypt_content(self._public_inbox.private_key, to_pub_k)
-    #     if to_pub_k:
-    #         evt.content = evt.encrypt_content(self._as_user.private_key, to_pub_k)
-    #     else:
-    #         evt.content = evt.encrypt_content(self._public_inbox.private_key, self._public_inbox.public_key)
-    #
-    #     evt.sign(self._public_inbox.private_key)
-    #     return evt
-
 
     @property
     def message_events(self):
