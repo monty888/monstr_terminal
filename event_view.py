@@ -1039,7 +1039,7 @@ async def main(args):
         # because we're already connected we'll call manually
         if c_client.connected:
             my_connect(c_client)
-
+            my_client.set_on_connect(my_connect)
     while keep_running:
         await asyncio.sleep(0.1)
     my_client.end()
