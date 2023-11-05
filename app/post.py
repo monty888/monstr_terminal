@@ -181,7 +181,7 @@ class PostApp:
         else:
             is_subject = True
 
-        return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and self._to_users_k is None)
+        return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and not self._to_users_k)
 
     def accept_event(self,
                      the_client: Client,
