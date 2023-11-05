@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import sys
 from pathlib import Path
 import argparse
 from monstr.ident.profile import Profile
@@ -12,6 +11,7 @@ from app.post import PostApp
 from monstr.inbox import Inbox
 from cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
+from monstr.signing import BasicKeySigner, SignerInterface
 from monstr.util import util_funcs, ConfigError
 from util import load_toml
 
@@ -47,16 +47,16 @@ def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) 
     return ret
 
 
-def get_user_keys(user: str, alias_map: ProfileFileAlias = None) -> Keys:
+def get_user_signer(user: str, alias_map: ProfileFileAlias = None) -> SignerInterface:
 
     if user is None:
         raise ConfigError('no user supplied')
     elif user == '?':
-        ret = Keys()
-        print('created adhoc key - %s/%s' % (ret.public_key_hex(),
-                                             ret.public_key_bech32()))
+        adhoc_k = Keys()
+        ret = BasicKeySigner(adhoc_k)
+        print(f'created adhoc key - {adhoc_k.public_key_hex()}/{adhoc_k.public_key_bech32()}')
     else:
-        ret = create_key(user, 'user', alias_map)
+        ret = BasicKeySigner(create_key(user, 'user', alias_map))
 
     return ret
 
@@ -88,9 +88,10 @@ def get_to_keys(to_users: [str], ignore_missing: bool, alias_map: ProfileFileAli
 
 
 async def get_poster(client: Client,
-                     user_k: Keys,
-                     to_users_k: Keys,
-                     inbox_k: Keys,
+                     profile_handler: NetworkedProfileEventHandler,
+                     user_sign: SignerInterface,
+                     to_users_k: [Keys],
+                     inbox_sign: SignerInterface,
                      inbox_kind: int,
                      is_encrypt: bool,
                      subject: str,
@@ -98,81 +99,62 @@ async def get_poster(client: Client,
                      tags: str) -> PostApp:
     k: Keys
 
-    # get profiles of from/to if we can
-    peh = NetworkedProfileEventHandler(client=client)
-
-    # make list of p keys we need
-    p_to_fetch = [user_k.public_key_hex()]
-    if to_users_k:
-        p_to_fetch = p_to_fetch + [k.public_key_hex() for k in to_users_k]
-    if inbox_k:
-        p_to_fetch = p_to_fetch + [inbox_k.public_key_hex()]
-
-    # pre-fetch them, creating stubs for any we didn't find
-    await peh.aget_profiles(pub_ks=p_to_fetch, create_missing=True)
-
-    # get the sending user profile
-    user_p = await peh.aget_profile(pub_k=user_k.public_key_hex())
-    # because relay doesn't know the private key
-    user_p.private_key = user_k.private_key_hex()
-
     # are we going via an inbox?
     inbox = None
-    if inbox_k:
-        inbox = await get_inbox(keys=inbox_k,
-                                for_keys=user_k,
+    if inbox_sign:
+        inbox = await get_inbox(inbox_sign=inbox_sign,
+                                user_sign=user_sign,
                                 to_keys=to_users_k,
                                 inbox_kind=inbox_kind,
-                                profile_handler=peh)
-
-    # get the to users profile if any
-    to_users_p = None
-    if to_users_k:
-        to_users_p = await peh.aget_profiles([k.public_key_hex() for k in to_users_k])
+                                profile_handler=profile_handler)
 
     post_app = PostApp(use_relay=client,
-                       as_user=user_p,
-                       to_users=to_users_p,
+                       profile_handler=profile_handler,
+                       user_sign=user_sign,
+                       to_users_k=to_users_k,
                        inbox=inbox,
                        subject=subject,
                        is_encrypt=is_encrypt,
                        kind=kind,
                        tags=tags)
 
+    await post_app.wait_ready()
+
     return post_app
 
 
-async def get_inbox(keys: Keys,
-                    for_keys: Keys,
+async def get_inbox(inbox_sign: SignerInterface,
+                    user_sign: SignerInterface,
                     to_keys: [Keys],
                     inbox_kind: int,
                     profile_handler: NetworkedProfileEventHandler=None) -> Inbox:
     # are we going via an inbox?
     ret = None
-    name = util_funcs.str_tails(keys.public_key_hex())
+    inbox_pub_k = await inbox_sign.get_public_key()
 
     # if given a profile handler we'll attempt to get a name for the inbox (from meta event)
     if profile_handler is not None:
-        inbox_p: Profile = await profile_handler.aget_profile(keys.public_key_hex())
+        inbox_p: Profile = await profile_handler.aget_profile(inbox_pub_k,
+                                                              create_missing=True)
         name = inbox_p.display_name()
 
     # actually create the inbox
-    ret = Inbox(keys=keys,
+    ret = Inbox(signer=inbox_sign,
                 name=name,
                 use_kind=inbox_kind)
 
     # generate share map for any encrypts over the inbox
     if to_keys:
-        ret.set_share_map(for_keys=for_keys,
-                          to_keys=to_keys)
+        await ret.set_share_map(for_sign=user_sign,
+                                to_keys=to_keys)
 
     return ret
 
 
 async def post_single(relays: [str],
-                      user_k: Keys,
+                      user_sign: SignerInterface,
                       to_users_k: Keys,
-                      inbox_k: Keys,
+                      inbox_sign: SignerInterface,
                       inbox_kind: int,
                       is_encrypt: bool,
                       subject: str,
@@ -181,33 +163,40 @@ async def post_single(relays: [str],
                       tags: str = None):
 
     def on_auth(the_client: Client, challenge: str):
-        auth_k = user_k
-        if inbox_k:
-            auth_k = inbox_k
-        the_client.auth(auth_k, challenge)
+        auth_sign = user_sign
+        if inbox_sign:
+            auth_sign = inbox_sign
+
+        asyncio.create_task(the_client.auth(auth_sign, challenge))
 
     async with ClientPool(relays, timeout=10, on_auth=on_auth) as client:
-        post_app = await get_poster(client=client,
-                                    user_k=user_k,
-                                    to_users_k=to_users_k,
-                                    inbox_k=inbox_k,
-                                    inbox_kind=inbox_kind,
-                                    is_encrypt=is_encrypt,
-                                    subject=subject,
-                                    kind=kind,
-                                    tags=tags)
+        try:
+            post_app = await get_poster(client=client,
+                                        profile_handler=NetworkedProfileEventHandler(client=client),
+                                        user_sign=user_sign,
+                                        to_users_k=to_users_k,
+                                        inbox_sign=inbox_sign,
+                                        inbox_kind=inbox_kind,
+                                        is_encrypt=is_encrypt,
+                                        subject=subject,
+                                        kind=kind,
+                                        tags=tags)
 
-        post_app.show_post_info(message)
-        post_app.do_post(message)
+            await post_app.show_post_info(message)
+            await post_app.do_post(message)
+        except Exception as e:
+            print(e)
+
+
 
         # hack to give time for the event to be sent
         await asyncio.sleep(1)
 
 
 async def post_loop(relays: [str],
-                    user_k: Keys,
-                    to_users_k: Keys,
-                    inbox_k: Keys,
+                    user_sign: SignerInterface,
+                    to_users_k: [Keys],
+                    inbox_sign: SignerInterface,
                     inbox_kind: int,
                     is_encrypt: bool,
                     subject: str,
@@ -216,6 +205,10 @@ async def post_loop(relays: [str],
 
     sub_id: str = None
     con_status = None
+
+    inbox_pub_k = None
+    if inbox_sign:
+        inbox_pub_k = await inbox_sign.get_public_key()
 
     # if we're using an inbox then events are always encrypted type 4
     # though they may be unencrypted to anyone who has the inbox keys
@@ -226,12 +219,12 @@ async def post_loop(relays: [str],
             'kinds': [kind],
             'limit': 10
         }
-        if inbox_k:
-            filter['authors'] = [inbox_k.public_key_hex()]
+        if inbox_pub_k:
+            filter['authors'] = [inbox_pub_k]
             filter['kinds'] = [inbox_kind]
 
         # can only be applied on non wrapped, otherwise needs to be filtered by post app
-        if subject and inbox_k is None:
+        if subject and inbox_pub_k is None:
             filter['#subject'] = subject
 
         sub_id = my_client.subscribe(handlers=[post_app],
@@ -264,17 +257,19 @@ async def post_loop(relays: [str],
         do_sub()
 
     def on_auth(the_client: Client, challenge: str):
-        auth_k = user_k
-        if inbox_k:
-            auth_k = inbox_k
-        the_client.auth(auth_k, challenge)
+        auth_sign = user_sign
+        if inbox_sign:
+            auth_sign = inbox_sign
+
+        asyncio.create_task(the_client.auth(auth_sign, challenge))
 
     async with ClientPool(relays, on_auth=on_auth) as my_client:
         peh = NetworkedProfileEventHandler(client=my_client)
         post_app = await get_poster(client=my_client,
-                                    user_k=user_k,
+                                    profile_handler=peh,
+                                    user_sign=user_sign,
                                     to_users_k=to_users_k,
-                                    inbox_k=inbox_k,
+                                    inbox_sign=inbox_sign,
                                     inbox_kind=inbox_kind,
                                     is_encrypt=is_encrypt,
                                     subject=subject,
@@ -475,8 +470,8 @@ async def main(args):
     if loop is False and not message:
         raise ConfigError('no message supplied to post')
 
-    user_keys = get_user_keys(user,
-                              alias_map=key_alias)
+    user_signer = get_user_signer(user,
+                                  alias_map=key_alias)
 
     if is_encrypt and to_users is None:
         raise ConfigError('to users is required for encrypted messages')
@@ -484,15 +479,15 @@ async def main(args):
     to_keys = get_to_keys(to_users, ignore_missing,
                           alias_map=key_alias)
 
-    inbox_keys = None
+    inbox_signer = None
     if inbox:
-        inbox_keys = get_user_keys(inbox, alias_map=key_alias)
+        inbox_signer = get_user_signer(inbox, alias_map=key_alias)
 
     if loop is False:
         await post_single(relays=relays,
-                          user_k=user_keys,
+                          user_sign=user_signer,
                           to_users_k=to_keys,
-                          inbox_k=inbox_keys,
+                          inbox_sign=inbox_signer,
                           inbox_kind=inbox_kind,
                           is_encrypt=is_encrypt,
                           subject=subject,
@@ -500,11 +495,12 @@ async def main(args):
                           kind=kind,
                           tags=tags
                           )
+
     else:
         await post_loop(relays=relays,
-                        user_k=user_keys,
+                        user_sign=user_signer,
                         to_users_k=to_keys,
-                        inbox_k=inbox_keys,
+                        inbox_sign=inbox_signer,
                         inbox_kind=inbox_kind,
                         is_encrypt=is_encrypt,
                         subject=subject,

@@ -78,7 +78,7 @@ class PostAppGui:
             if msg.replace(' ', ''):
 
                 if self._post_app.connection_status:
-                    self._post_app.do_post(msg)
+                    asyncio.create_task(self._post_app.do_post(msg))
                 else:
                     'in someway make user aware that we dont have a connection to relay...'
                     pass
@@ -130,6 +130,8 @@ class PostAppGui:
         to_add = []
 
         as_user = self._post_app.as_user
+        as_sign = self._post_app.as_signer
+
         self._msg_display_height = 0
         # prefetch all the profiles we'll need
         if self._profile_handler:
@@ -146,18 +148,20 @@ class PostAppGui:
             if not self._post_app.connection_status:
                 content_col = prompt_col = 'gray'
 
-            if self._is_encrypt:
-
+            if self._is_encrypt and as_sign:
                 try:
-                    priv_key = as_user.private_key
-
                     use_pub_key = c_m.p_tags[0]
 
                     # its a message to us
                     if c_m.pub_key != as_user.public_key:
                         use_pub_key = c_m.pub_key
 
-                    content = c_m.decrypted_content(priv_key, use_pub_key, check_kind=False)
+                    try:
+                        content = await as_sign.decrypt_text(encrypt_text=c_m.content,
+                                                             for_pub_k=use_pub_key)
+                    except Exception as x:
+                        content = x
+
                 except Exception as e:
                     # currently in the case of group messages we'd expect this except on those we create
                     # and the 1 msg that was encrypted for us... we can't tell which that is until we try to decrypt

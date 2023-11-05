@@ -8,6 +8,7 @@ from monstr.ident.alias import ProfileFileAlias
 from monstr.encrypt import Keys
 from monstr.util import ConfigError
 
+
 def load_toml(filename, dir):
     if os.path.sep not in filename:
         filename = dir+os.path.sep+filename
@@ -16,13 +17,18 @@ def load_toml(filename, dir):
     f = Path(filename)
     if f.is_file():
         try:
-            ret = toml.load(filename)
+            toml_dict = toml.load(filename)
+
+            for n, v in toml_dict.items():
+                ret[n.replace('-','_')] = v
+
         except TomlDecodeError as te:
             print(f'Error in config file {filename} -{te}')
             sys.exit(2)
 
     else:
         logging.debug(f'load_toml:: no config file {filename}')
+
     return ret
 
 

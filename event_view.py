@@ -9,12 +9,14 @@ from datetime import datetime, timedelta
 from monstr.ident.profile import Profile, Contact, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
 from monstr.ident.alias import ProfileFileAlias
+from monstr.ident.profile import ContactList
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, \
     NotOnlyNumbersAcceptor, EventHandler, LastEventHandler, FilterAcceptor
 from monstr.util import util_funcs, ConfigError
 from monstr.inbox import Inbox
 from monstr.encrypt import Keys
+from monstr.signing import SignerInterface, BasicKeySigner
 from monstr.event.event import Event
 from cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
 from util import load_toml, get_keys_from_str
@@ -76,6 +78,7 @@ def get_int_or_none(val: str, f_name: str) -> int:
 async def get_from_config(config,
                           profile_handler: ProfileEventHandlerInterface):
     as_user: Profile = None
+    as_sign: SignerInterface = None
     all_view = []
     view_extra = []
     view_contact = []
@@ -92,28 +95,35 @@ async def get_from_config(config,
                                      private_only=False,
                                      single_only=True,
                                      alias_map=alias_map)[0]
+        # if we were given a private key then we can create a basic signer
+        # so in future this could be something else e.g something external like nsec bunker
+        # or hardware device (though that'd probably be pain just for viewing unless it
+        # let you batch accept decrypts)
+        if user_key.private_key_hex():
+            as_sign = BasicKeySigner(user_key)
 
         as_user = await profile_handler.aget_profile(user_key.public_key_hex(),
-                                                     create_missing=True)
-        # if we were given a private key then we'll attach it to the profile so it can decode msgs
-        if user_key.private_key_hex():
-            as_user.private_key = user_key.private_key_hex()
-
-        if not as_user:
-            raise ConfigError(f'unable to find/create as_user profile - {config["as_user"]}')
-
-        all_view.append(as_user)
-
-        # lookup and add contacts to view?
-        if contacts:
-            c_c: Contact
-            await profile_handler.aload_contacts(as_user)
-            contacts = as_user.contacts
+                                                     create_missing=False)
+        if as_user:
+            all_view.append(as_user)
+            # lookup and add contacts to view?
             if contacts:
-                contact_ps = await profile_handler.aget_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
-                                                                 create_missing=True)
-                view_contact = contact_ps.profiles
-                all_view = all_view + contact_ps.profiles
+                c_c: Contact
+                await profile_handler.aload_contacts(as_user)
+                contacts = as_user.contacts
+                if contacts:
+                    contact_ps = await profile_handler.aget_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
+                                                                     create_missing=True)
+                    view_contact = contact_ps.profiles
+                    all_view = all_view + contact_ps.profiles
+        else:
+            print(f'WARNING: unable to find as_user profile - {config["as_user"]},can\'t get follows')
+            # continue with stubb as_user profile
+            as_user = await profile_handler.aget_profile(user_key.public_key_hex(),
+                                                         create_missing=True)
+            as_user.contacts = ContactList(contacts=[],
+                                           owner_pub_k=as_user.public_key)
+            all_view.append(as_user)
 
     # addtional profiles to view other than current profile
     if config['view_extra']:
@@ -179,6 +189,7 @@ async def get_from_config(config,
 
     config.update({
         'as_user': as_user,
+        'as_sign': as_sign,
         'all_view': all_view,
         'view_contact': view_contact,
         'view_extra': view_extra,
@@ -206,14 +217,16 @@ class MyClassifier:
         self._view_profiles = view_profiles
         self._inboxes = public_inboxes
         self._view_keys = []
-        self._make_view_keys()
         self._event_ids = event_ids
+
+    async def make_ready(self):
+        await self._make_view_keys()
 
     @property
     def view_keys(self):
         return self._view_keys
 
-    def _make_view_keys(self):
+    async def _make_view_keys(self):
         c_c: Contact
         c_p: Profile
         c_i: Inbox
@@ -227,7 +240,7 @@ class MyClassifier:
             self._view_keys = self._view_keys + [c_p.public_key for c_p in self._view_profiles]
 
         if self._inboxes is not None:
-            self._view_keys = self._view_keys + [c_i.view_key for c_i in self._inboxes]
+            self._view_keys = self._view_keys + [await c_i.pub_key for c_i in self._inboxes]
 
     def classify(self, evt: Event):
         # we requested it but it might still be considered spam, we mark here
@@ -268,6 +281,11 @@ class PrintEventHandler(EventHandler):
         self._nip_checker: NIP5Helper = nip5helper
         self._pow = pow
         self._nip5 = nip5
+
+        # prints are queued
+        self._print_queue = asyncio.Queue()
+        asyncio.create_task(self._my_consumer())
+
         super().__init__(event_acceptors)
 
     async def _valid_nip5_event_pub(self, evt: Event) -> bool:
@@ -324,8 +342,16 @@ class PrintEventHandler(EventHandler):
         await self._printer.astatus(status)
 
     def do_event(self, the_client: Client, sub_id, evt: Event):
-        # client only supports sync do_event - maybe change?
-        asyncio.create_task(self.ado_event(the_client, sub_id, evt))
+        # add the the evt to the print queue
+        self._print_queue.put_nowait((the_client, sub_id, evt))
+
+    async def _my_consumer(self):
+        try:
+            while True:
+                args = await self._print_queue.get()
+                await self.ado_event(*args)
+        except Exception as e:
+            logging.debug(f'PrintEventHandler::_my_consumer - {e}')
 
 
 def get_args() -> dict:
@@ -339,12 +365,13 @@ def get_args() -> dict:
     """
 
     ret = {
-        'work-dir': WORK_DIR,
+        'work_dir': WORK_DIR,
         'conf': CONFIG_FILE,
         'relay': RELAYS,
-        'as-user': AS_USER,
+        'as_user': AS_USER,
+        'as_sign': None,
         'contacts': VIEW_CONTACTS,
-        'view-extra': VIEW_EXTRA,
+        'view_extra': VIEW_EXTRA,
         'via': INBOXES,
         'direction': DIRECTION,
         'limit': LIMIT,
@@ -358,13 +385,13 @@ def get_args() -> dict:
         'nip5': False,
         'nip5check': False,
         'pubkey': False,
-        'match-tags': None,
+        'match_tags': None,
         'hashtag': None,
         'tags': None,
         'eid': None,
         'start_mode': START_MODE,
         'output': OUTPUT,
-        'ssl-disable-verify': None,
+        'ssl_disable_verify': None,
         'entities': False,
         'exit': EXIT,
         'debug': False,
@@ -373,7 +400,7 @@ def get_args() -> dict:
     # only done to get the work-dir and conf options if set
     ret.update(get_cmdline_args(ret))
     # now form config file if any
-    ret.update(load_toml(ret['conf'], ret['work-dir']))
+    ret.update(load_toml(ret['conf'], ret['work_dir']))
 
     # 2pass so that cmdline options override conf file options
     ret.update(get_cmdline_args(ret))
@@ -403,25 +430,25 @@ def get_cmdline_args(args) -> dict:
     )
     parser.add_argument('-c', '--conf', action='store', default=args['conf'],
                         help=f'name com TOML file to use for configuration, default[{args["conf"]}]')
-    parser.add_argument('--work-dir', action='store', default=args['work-dir'],
-                        help=f'base dir for files used if full path isn\'t given, default[{args["work-dir"]}]')
+    parser.add_argument('--work-dir', action='store', default=args['work_dir'],
+                        help=f'base dir for files used if full path isn\'t given, default[{args["work_dir"]}]')
     parser.add_argument('-r', '--relay', action='store', default=args['relay'],
                         help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
-    parser.add_argument('-a', '--as-user', action='store', default=args['as-user'],
+    parser.add_argument('-a', '--as-user', action='store', default=args['as_user'],
                         help=f"""
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                         encrypted events will be left encrypted, 
-                        default[{args['as-user']}]""")
+                        default[{args['as_user']}]""")
     parser.add_argument('--contacts', action='store_true',
                         help='if --as-user lookup contacts and add to view',
                         default=args['contacts'])
     parser.add_argument('--no-contacts', action='store_false',
                         help='if --as-user DO NOT add contacts to view',
                         default=args['contacts'], dest='contacts')
-    parser.add_argument('--view-extra', action='store', default=args['view-extra'],
+    parser.add_argument('--view-extra', action='store', default=args['view_extra'],
                         help=f"""
                             additional comma separated alias, priv_k or pub_k of user to view,
-                            default[{args['view-extra']}]""")
+                            default[{args['view_extra']}]""")
     parser.add_argument('-v', '--via', action='store', default=args['via'],
                         help=f"""
                             additional comma separated alias(with priv_k) or priv_k that will be used 
@@ -513,7 +540,7 @@ def get_cmdline_args(args) -> dict:
     return vars(ret)
 
 
-def get_event_filters(view_profiles: [Profile],
+async def get_event_filters(view_profiles: [Profile],
                       since: datetime,
                       until: datetime,
                       limit: int,
@@ -565,7 +592,7 @@ def get_event_filters(view_profiles: [Profile],
             # all have to be on same kind
             'kinds': [inboxes[0].kind],
             # inboxes are actually profile objs not inboxes here :(!
-            'authors': [c_i.view_key for c_i in inboxes]
+            'authors': [await c_i.pub_key for c_i in inboxes]
         })
 
     # add common filter paras to all filters
@@ -667,7 +694,7 @@ async def print_run_info(relay,
     if inboxes:
         print(f'--- checking inboxes using kind {inboxes[0].kind} ---')
         for c_i in inboxes:
-            print(c_i.name)
+            print(await c_i.name)
 
     if view_kinds:
         filter_about = [f'showing events of kind {view_kinds}']
@@ -723,6 +750,7 @@ async def main(args):
 
     # user that we running as, if this user has priv_k then where needed we'll do decryption and output plaintext
     as_user: Profile = config['as_user']
+    as_sign = config['as_sign']
 
     # add add user contacts to view
     c_p: Profile
@@ -764,16 +792,17 @@ async def main(args):
     inbox_keys: [Keys] = config['inbox_keys']
     c_k: Keys
     for c_k in inbox_keys:
-        n_inbox: Inbox = Inbox(keys=c_k,
-                               name=profile_handler.get_profile(c_k.public_key_hex()).display_name(),
-                               use_kind=inbox_kinds)
+        n_inbox = Inbox(signer=BasicKeySigner(c_k),
+                        name=profile_handler.get_profile(c_k.public_key_hex()).display_name(),
+                        use_kind=inbox_kinds)
+
         inboxes.append(n_inbox)
 
     # now set share map on inboxes if so we can see/decrypt encrypted message in them
-    if as_user:
+    if as_sign:
         for c_i in inboxes:
-            c_i.set_share_map(for_keys=as_user.keys,
-                              to_keys=extra_and_contact_k)
+            await c_i.set_share_map(for_sign=as_sign,
+                                    to_keys=extra_and_contact_k)
 
     # sent from or to or both keys we've given
     direction = config['direction']
@@ -837,20 +866,20 @@ async def main(args):
 
     # just a wrap around get_event_filters so we don't have to call with all the
     # fields all the time
-    def my_get_event_filters(with_since):
+    async def my_get_event_filters(with_since):
 
-        return get_event_filters(view_profiles=view_profiles,
-                                 since=with_since,
-                                 until=until,
-                                 limit=limit,
-                                 mention_eids=mention_eids,
-                                 kinds=view_kinds,
-                                 pow=pow,
-                                 nip5=nip5,
-                                 direction=direction,
-                                 hash_tag=hash_tag,
-                                 inboxes=inboxes,
-                                 inbox_only=inbox_only)
+        return await get_event_filters(view_profiles=view_profiles,
+                                       since=with_since,
+                                       until=until,
+                                       limit=limit,
+                                       mention_eids=mention_eids,
+                                       kinds=view_kinds,
+                                       pow=pow,
+                                       nip5=nip5,
+                                       direction=direction,
+                                       hash_tag=hash_tag,
+                                       inboxes=inboxes,
+                                       inbox_only=inbox_only)
 
     # show run info except if we're outputting json
     if output != 'json':
@@ -887,8 +916,11 @@ async def main(args):
             }
         ])
 
+        asyncio.create_task(do_event_sub(the_client, use_since))
+
+    async def do_event_sub(the_client: Client, use_since):
         # get the event filter with since
-        event_filter = my_get_event_filters(with_since=use_since)
+        event_filter = await my_get_event_filters(with_since=use_since)
         # set filter to the acceptor - if a relay gives us events that don't pass our filter we'll reject
         e_filter_acceptor.filter = event_filter
         # now subscribe
@@ -897,7 +929,7 @@ async def main(args):
 
     # actually does the outputting
     if output == 'json':
-        my_printer = JSONPrinter(as_user=as_user,
+        my_printer = JSONPrinter(as_sign=as_sign,
                                  inboxes=inboxes,
                                  encrypted_kinds=encrypt_kinds)
     elif output == 'formatted':
@@ -907,6 +939,7 @@ async def main(args):
             fnip_check = nip5helper
 
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
+                                           as_sign=as_sign,
                                            as_user=as_user,
                                            inboxes=inboxes,
                                            show_pub_key=show_pubkey,
@@ -916,16 +949,23 @@ async def main(args):
                                            kinds=view_kinds,
                                            encrypted_kinds=encrypt_kinds)
     elif output == 'content':
-        my_printer = ContentPrinter(as_user=as_user,
+        my_printer = ContentPrinter(as_sign=as_sign,
                                     inboxes=inboxes,
                                     encrypted_kinds=encrypt_kinds)
 
     # initial filter to get upto now
-    boot_e_filter = my_get_event_filters(with_since=since)
+    boot_e_filter = await my_get_event_filters(with_since=since)
 
     # set inital accept criteria, this is a double check on what relays return
     # e_filter_acceptor.filter = boot_e_filter
 
+    #
+    my_classifier = MyClassifier(event_ids=mention_eids,
+                                 as_user=as_user,
+                                 view_contacts=view_contacts,
+                                 view_profiles=view_profiles,
+                                 public_inboxes=inboxes)
+    await my_classifier.make_ready()
     # event handler for printing events
     print_handler = PrintEventHandler(profile_handler=profile_handler,
                                       event_acceptors=[DeduplicateAcceptor(),
@@ -934,11 +974,7 @@ async def main(args):
                                                        NotOnlyNumbersAcceptor()
                                                        ],
                                       printer=my_printer,
-                                      classifier=MyClassifier(event_ids=mention_eids,
-                                                              as_user=as_user,
-                                                              view_contacts=view_contacts,
-                                                              view_profiles=view_profiles,
-                                                              public_inboxes=inboxes),
+                                      classifier=my_classifier,
                                       nip5helper=nip5helper,
                                       pow=pow is not None,
                                       nip5=nip5)
