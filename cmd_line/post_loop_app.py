@@ -104,7 +104,6 @@ class PostAppGui:
         self._scroll_bottom()
 
     def _on_msg(self, evt):
-
         # async def delay_draw():
         #     await asyncio.sleep(0.5)
         #     await self.draw_messages()

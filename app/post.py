@@ -155,6 +155,7 @@ class PostApp:
         try:
             while True:
                 args = await self._msg_queue.get()
+
                 await self.do_event_task(*args)
         except Exception as e:
             logging.debug(f'PostApp::_my_consumer - {e}')
@@ -180,7 +181,7 @@ class PostApp:
         else:
             is_subject = True
 
-        return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and self._to_users is None)
+        return self._chat_members == msg_members and is_subject or (self._is_encrypt is False and self._to_users_k is None)
 
     def accept_event(self,
                      the_client: Client,
@@ -210,7 +211,7 @@ class PostApp:
                 # return None if we failed to unwrap
                 evt = await self._inbox.unwrap_event(evt, user_sign)
             except Exception as e:
-                print(e)
+                pass
 
         if evt and self.accept_event(client, sub_id, evt) and evt.kind == self._kind:
             if self._is_chat(evt):
