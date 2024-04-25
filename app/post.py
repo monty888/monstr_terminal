@@ -17,19 +17,6 @@ from monstr.encrypt import Keys
 
 class PostApp:
 
-    # @staticmethod
-    # def _get_public_key_str(k_obj: [Profile | Keys | str]):
-    #     ret = k_obj
-    #     if isinstance(k_obj, Profile):
-    #         ret = k_obj.public_key
-    #     elif isinstance(k_obj, Keys):
-    #         ret = k_obj.public_key_hex()
-    #
-    #     if not Keys.is_hex_key(ret):
-    #         raise ValueError(f'{k_obj} unable to get nostr pub_k')
-    #
-    #     return ret
-
     def __init__(self,
                  use_relay,
                  profile_handler: ProfileEventHandlerInterface,
@@ -64,9 +51,9 @@ class PostApp:
         # default kinds for encrypt/no encrypt
         if kind is None:
             if self._is_encrypt:
-                self._kind = 4
+                self._kind = Event.KIND_ENCRYPT
             else:
-                self._kind = 1
+                self._kind = Event.KIND_TEXT_NOTE
 
         # not, doesn't stop you from encrypting data send e.g. over kind 1 though you probably don't want to do that
         else:
@@ -270,7 +257,7 @@ class PostApp:
                         pub_key=self._as_user_pub_k,
                         tags=tags)
             if post_to:
-                ret.content = await self._user_sign.encrypt_text(plain_text=ret.content,
+                ret.content = await self._user_sign.nip4_encrypt(plain_text=ret.content,
                                                                  to_pub_k=post_to)
 
             await self._user_sign.sign_event(ret)

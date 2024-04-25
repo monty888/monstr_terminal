@@ -3,8 +3,6 @@
 
 """
 import asyncio
-import logging
-
 from prompt_toolkit import Application
 from prompt_toolkit.layout import Layout, ScrollablePane
 from prompt_toolkit.layout.containers import HSplit, Window
@@ -156,7 +154,7 @@ class PostAppGui:
                         use_pub_key = c_m.pub_key
 
                     try:
-                        content = await as_sign.decrypt_text(encrypt_text=c_m.content,
+                        content = await as_sign.nip4_decrypt(payload=c_m.content,
                                                              for_pub_k=use_pub_key)
                     except Exception as x:
                         content = x

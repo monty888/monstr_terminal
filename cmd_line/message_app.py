@@ -21,13 +21,12 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
 from monstr.ident.profile import Profile, UnknownProfile, ProfileList
 from monstr.ident.event_handlers import ProfileEventHandler
 from monstr.ident.persist import SQLProfileStore, MemoryProfileStore
-from monstr.event.event_handlers import EventHandler
 from monstr.event.event import Event
 from monstr.client.client import Client
-# from nostr.client.persist import SQLEventStore, TransientEventStore
-from monstr.event.persist import ClientSQLiteEventStore, MemoryEventStore
 from monstr.client.messaging import MessageThreads
 from monstr.db.db import Database
+from monstr.event.persist_memory import MemoryEventStore
+from monstr.event.persist_sqlite import SQLEventStore
 
 def is_left_click(e):
     return e.event_type == MouseEventType.MOUSE_DOWN and e.button == MouseButton.LEFT
@@ -653,10 +652,10 @@ class ChatApp:
         if self._db:
             # we'll want to listen eventually and add as handler to client sub
             self._profiles = ProfileEventHandler(SQLProfileStore(self._db), None)
-            self._event_store = ClientSQLEventStore(self._db)
+            self._event_store = SQLEventStore(self._db)
         else:
             self._profiles = ProfileEventHandler(MemoryProfileStore(), None)
-            self._event_store = ClientMemoryEventStore()
+            self._event_store = MemoryEventStore()
 
         self._profile = self._profiles.profiles.get_profile(as_profile,None)
 

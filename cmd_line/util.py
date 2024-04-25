@@ -120,12 +120,12 @@ class WrappedEventPrinter(EventPrinter):
             # (Like we produce from poster)
             for c_p_tag in [evt.pub_key] + evt.p_tags:
                 try:
-                    ret.content = await self._as_sign.decrypt_text(encrypt_text=ret.content,
+                    ret.content = await self._as_sign.nip4_decrypt(payload=ret.content,
                                                                    for_pub_k=c_p_tag)
+
                     # if we got here then we manage to decrypt so exit
                     break
                 except Exception as e:
-
                     pass
 
         return ret
@@ -157,6 +157,7 @@ class JSONPrinter(WrappedEventPrinter):
 
         super().__init__(as_sign=as_sign,
                          inboxes=inboxes,
+                         kinds=kinds,
                          encrypted_kinds=encrypted_kinds)
 
     # outputs event in raw format
