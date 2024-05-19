@@ -70,7 +70,7 @@ def get_args():
         logging.getLogger().setLevel(logging.DEBUG)
 
     my_alias = ProfileFileAlias(ALIAS_FILE)
-    p: Profile
+    p: Profile = None
     if ret.as_user:
         k = Keys.get_key(ret.as_user)
         if k is None:
@@ -82,7 +82,7 @@ def get_args():
 
     if ret.bootstrap:
         boot_keys = []
-        for c_k in ret.bootstrap.split(','):
+        for c_k in ret.bootstrap:
             k = Keys.get_key(c_k)
             if k is None:
                 if p is None:
@@ -106,7 +106,7 @@ async def display_profile(p: Profile,
 
     if as_user:
         if not as_user.contacts_is_set():
-            profile_handler.load_contacts(as_user)
+            await profile_handler.aload_contacts(as_user)
         # for marking those we follow
         if p.public_key in as_user.contacts.follow_keys():
             follows = 'F'
@@ -210,7 +210,7 @@ class My_EventHandler(EventHandler):
             self._u_pubs_client[client.url] = set()
 
             for c_chunk in util_funcs.chunk(list(to_fetch), 20):
-                await self._profile_handler.get_profiles(c_chunk)
+                await self._profile_handler.aget_profiles(c_chunk)
             self._since = util_funcs.date_as_ticks(datetime.now())
             self._my_task = None
 
@@ -317,22 +317,22 @@ async def do_search():
             if len(args) == 1:
                 k = Keys.get_key(args[0])
                 if k:
-                    for_user = await peh.get_profile(k.public_key_hex())
+                    for_user = await peh.aget_profile(k.public_key_hex())
                 else:
                     output = args[0]
             elif len(args) == 2:
                 k = Keys.get_key(args[0])
                 if k:
-                    for_user = await peh.get_profile(k.public_key_hex())
+                    for_user = await peh.aget_profile(k.public_key_hex())
                 output = args[1]
             if for_user:
                 if not for_user.contacts_is_set():
-                    await peh.load_contacts(for_user)
+                    await peh.aload_contacts(for_user)
                 c_contact: Contact
-                await peh.get_profiles([c_contact.contact_public_key for c_contact in for_user.contacts],
-                                       create_missing=True)
+                await peh.aget_profiles([c_contact.contact_public_key for c_contact in for_user.contacts],
+                                        create_missing=True)
                 for c_contact in for_user.contacts:
-                    c_p = await peh.get_profile(c_contact.contact_public_key)
+                    c_p = await peh.aget_profile(c_contact.contact_public_key)
                     await display_profile(c_p,
                                           profile_handler=peh,
                                           as_user=as_user,
@@ -344,7 +344,7 @@ async def do_search():
             if args:
                 k = Keys.get_key(args[0])
                 if k:
-                    for_user = await peh.get_profile(k.public_key_hex())
+                    for_user = await peh.aget_profile(k.public_key_hex())
             if for_user:
                 events = await my_client.query({
                     'authors': [for_user.public_key],
@@ -353,7 +353,9 @@ async def do_search():
                 })
                 c_evt: Event
                 for c_evt in events:
-                    await post_printer.print_event(c_evt)
+                    await post_printer.aprint_event(the_client=None,
+                                                    sub_id=None,
+                                                    evt=c_evt)
                     # await aioconsole.aprint('%s@%s' % (util_funcs.str_tails(c_evt.id), c_evt.created_at))
                     # await aioconsole.aprint(c_evt.content)
             else:

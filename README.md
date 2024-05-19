@@ -27,7 +27,7 @@ nostr event viewer for the command line.
 
 
 ```commandline
-python event_view.py --help
+python -m monstr_terminal.event_view --help
 usage: event_view.py [-h] [-r RELAY] [-a AS_USER] [--view_profiles VIEW_PROFILES] [-v VIA] [-i EID] [-k KINDS] [-s SINCE] [-u UNTIL] [--pubkey]
                      [-t TAGS] [-p {8,12,16,20,24,28,32}] [-e] [--nip5check] [-n] [-o {formatted,json,content}] [--ssl_disable_verify] [-d]
 
@@ -109,11 +109,11 @@ options:
 
 view all event as they come in:
 ```shell
-python event_view.py 
+python -m monstr_terminal.event_view 
 ```
 view events for a given user, also an extra user that's not in thier follows and check in additional inbox:
 ```shell
-python event_view.py --as=<key or alias> --view=<key or alias> --via=<key or alias>
+python -m monstr_terminal.event_view --as=<key or alias> --view=<key or alias> --via=<key or alias>
 ````
 note that the view will be made by looking up the contacts event for the given key so that needs to be available 
 on the used relays. When a user is given encrypted text will automatically be decrypted. 
@@ -121,7 +121,7 @@ on the used relays. When a user is given encrypted text will automatically be de
 If you want to simply hack on the incoming events you can use the `-o json` output option to get the raw json
 for each event. See `event_view_consumer.py` for an example. 
 ```shell
-python event_view.py --as=<key or alias> --view=<key or alias> --via=<key or alias> -o json | python event_view_consumer.py
+python -m monstr_terminal.event_view --as=<key or alias> --view=<key or alias> --via=<key or alias> -o json | python event_view_consumer.py
 ```
 
 # poster
@@ -129,7 +129,7 @@ post nostr events from the command line, the events can optionally be sent via a
 only users with keys to that account we'll be able to decrypt the events.
 
 ```commandline
-python poster.py --help
+python -m monstr_terminal.poster --help
 usage: poster.py [-h] [-r RELAY] [-a AS_USER] [-t TO_USERS] [-v VIA] [-s SUBJECT] [--tags TAGS]
                  [-k KIND] [-f {plaintext,encrypt,default}] [-i] [-l] [-d]
                  [message ...]
@@ -177,15 +177,15 @@ options:
 ### examples
 send a plain text post:
 ```shell
-python poster.py -p --as=<key or alias> hello there
+python -m monstr_terminal.poster -p --as=<key or alias> hello there
 ```
 send encrypted post to another user:
 ```shell
-python poster.py --as=<key or alias> --to=<key or alias> hello there
+python -m monstr_terminal.poster --as=<key or alias> --to=<key or alias> hello there
 ```
 plain post in loop mode using a mailbox - only other users with key to the mailbox will be able to view messages: 
 ```shell
-python poster.py -pl --as=<key or alias> --via=<key or alias>
+python -m monstr_terminal.poster -pl --as=<key or alias> --via=<key or alias>
 ```
 # alias
 creates named aliases to keys so they can be referenced by user friendly name.
@@ -215,17 +215,17 @@ options:
 ### examples
 create a new key and alias monty:
 ```shell
-python alias.py -n monty        
+python -m monstr_terminal.alias -n monty        
 ```
 create a new profile and link to an existing known nsec/npub
-```
-python alias.py -n monty -k nsec.... 
+```shell
+python -m monstr_terminal.alias -n monty -k nsec.... 
 ```
 # relay
 basic relay implementation:
 
 ```commandline
-python run_relay.py --help
+python -m monstr_terminal.run_relay --help
 usage: run_relay.py [-h] [--host HOST] [--port PORT] [--endpoint ENDPOINT] [-s {sqlite,postgres,transient,none}]
                     [--dbfile DBFILE] [--pg_database PG_DATABASE] [--pg_user PG_USER] [--pg_password PG_PASSWORD]
                     [--maxsub MAXSUB] [--maxlength MAXLENGTH] [--max-before MAX_BEFORE] [--max-after MAX_AFTER] [--nip16]
@@ -285,11 +285,11 @@ tor_service_dir - directory where Tor hidden service files will be created
 ### examples
 run relay without storing any events
 ```shell
-python run_relay.py --store=none       
+python -m monstr_terminal.run_relay --store=none       
 ```
 wipe the default (sqlite) db
-```
-python run_relay.py --w
+```shell
+python -m monstr_terminal.run_relay --w
 ```
 
 # profile search
