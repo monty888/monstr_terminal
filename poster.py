@@ -7,13 +7,13 @@ from monstr.ident.event_handlers import NetworkedProfileEventHandler
 from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
 from monstr.event.event import Event
-from app.post import PostApp
+from monstr_terminal.app.post import PostApp
 from monstr.inbox import Inbox
-from cmd_line.post_loop_app import PostAppGui
+from monstr_terminal.cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
 from monstr.signing import BasicKeySigner, SignerInterface
 from monstr.util import util_funcs, ConfigError
-from util import load_toml
+from monstr_terminal.util import load_toml
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist

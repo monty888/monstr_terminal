@@ -18,7 +18,7 @@ from monstr.event.persist_sqlite import ARelaySQLiteEventStore
 from monstr.event.persist_memory import RelayMemoryEventStore
 from monstr.event.expire import ASQLiteNIP40Expirer, MemoryNIP40Expirer
 from monstr.util import ConfigError
-from util import load_toml
+from monstr_terminal.util import load_toml
 import ssl
 
 # default values when nothing is specified either from cmd line or config file

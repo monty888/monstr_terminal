@@ -1,4 +1,3 @@
-import json
 import logging
 import sys
 import signal
@@ -18,8 +17,8 @@ from monstr.inbox import Inbox
 from monstr.encrypt import Keys
 from monstr.signing import SignerInterface, BasicKeySigner
 from monstr.event.event import Event
-from cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
-from util import load_toml, get_keys_from_str
+from monstr_terminal.cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
+from monstr_terminal.util import load_toml, get_keys_from_str
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist

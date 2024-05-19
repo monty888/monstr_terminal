@@ -12,7 +12,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from monstr.ident.event_handlers import ProfileEventHandlerInterface
 from monstr.event.event import Event
 from monstr.util import util_funcs
-from app.post import PostApp
+from monstr_terminal.app.post import PostApp
 import os
 
 

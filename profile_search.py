@@ -28,7 +28,7 @@ from monstr.ident.persist import MemoryProfileStore
 from monstr.ident.event_handlers import NetworkedProfileEventHandler
 from monstr.ident.profile import Profile, Contact
 from monstr.ident.alias import ProfileFileAlias
-from cmd_line.util import FormattedEventPrinter
+from monstr_terminal.cmd_line.util import FormattedEventPrinter
 from monstr.client.event_handlers import EventHandler
 from monstr.client.client import ClientPool, Client
 from monstr.event.event import Event

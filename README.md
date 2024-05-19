@@ -1,12 +1,11 @@
 # install
 
 ```sh
-git clone --recurse-submodules https://github.com/monty888/monstr_terminal.git  
+git clone https://github.com/monty888/monstr_terminal.git  
 cd monstr_terminal  
 python3 -m venv venv   
 source venv/bin/activate   
-pip install -r requirements.txt   
-pip install ./monstr
+pip install .   
 ```
 
 to use postgres as store psycopg2 must be installed
