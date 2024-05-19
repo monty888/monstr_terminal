@@ -111,7 +111,7 @@ class WrappedEventPrinter(EventPrinter):
         :return:
         """
         # copy the event so we're working on a new obj
-        ret = Event.from_JSON(evt.event_data())
+        ret = Event.load(evt.data())
 
         if self.event_needs_decrypt(evt):
             # for the public key we'll try all p_tags and the events public key with
