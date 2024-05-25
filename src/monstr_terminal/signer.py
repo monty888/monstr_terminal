@@ -27,8 +27,8 @@ class SignerConnection(EventHandler):
 
     def __init__(self,
                  signer: SignerInterface,
-                 comm_k: str,
-                 relay: str):
+                 relay: str,
+                 comm_k: str = None):
 
         self._signer = signer
         self._comm_k = comm_k
@@ -72,7 +72,7 @@ class SignerConnection(EventHandler):
             'error': None
         })
 
-        content = await self._signer.encrypt_text(content, to_pub_k=self._comm_k)
+        content = await self._signer.nip4_encrypt(content, to_pub_k=self._comm_k)
 
         con_event = Event(pub_key=sign_k,
                           kind=NIP46_KIND,
@@ -86,11 +86,11 @@ class SignerConnection(EventHandler):
 
         self._client.publish(con_event)
 
-    async def _get_msg_event(self, content:str) -> Event:
+    async def _get_msg_event(self, content: str) -> Event:
         # returns encrypted and signed method for content
 
         # encrypt the content
-        content = await self._signer.encrypt_text(content,
+        content = await self._signer.nip4_encrypt(content,
                                                   to_pub_k=self._comm_k)
         # make the event
         ret = Event(pub_key=await self._signer.get_public_key(),
@@ -105,7 +105,7 @@ class SignerConnection(EventHandler):
 
         return ret
 
-    async def _do_response(self, result, error: str=None, id: str=None):
+    async def _do_response(self, result, error: str = None, id: str = None):
         if id is None:
             id = util_funcs.get_rnd_hex_str(8)
         if error is None:
@@ -116,9 +116,6 @@ class SignerConnection(EventHandler):
             'result': result,
             'error': error
         }))
-
-
-        await asyncio.sleep(3)
 
         self._client.publish(evt)
 
@@ -141,16 +138,21 @@ class SignerConnection(EventHandler):
     #     await self._do_response(result=)
 
     async def connect(self, id: str, params: [str]):
+        if self._comm_k is None:
+            self._comm_k = params[0]
+
+        print('cool we use', self._comm_k)
+
         await self._do_response(result=await self._signer.get_public_key(),
                                 id=id)
 
-    async def describe(self, id: str, params: [str]):
-        await self._do_response(result=['describe',
-                                        'get_public_key',
-                                        'sign_event',
-                                        'nip04_decrypt',
-                                        'connect'],
-                                id=id)
+    # async def describe(self, id: str, params: [str]):
+    #     await self._do_response(result=['describe',
+    #                                     'get_public_key',
+    #                                     'sign_event',
+    #                                     'nip04_decrypt',
+    #                                     'connect'],
+    #                             id=id)
 
     async def get_public_key(self, id: str, params: [str]):
         await self._do_response(result=await self._signer.get_public_key(),
@@ -187,7 +189,7 @@ class SignerConnection(EventHandler):
         )
 
     async def ado_event(self, the_client: Client, sub_id, evt: Event):
-        decrypted_evt = await self._signer.decrypt_nip4(evt)
+        decrypted_evt = await self._signer.nip4_decrypt_event(evt)
 
         try:
             cmd_dict = json.loads(decrypted_evt.content)
@@ -207,9 +209,7 @@ class SignerConnection(EventHandler):
             print(e)
             logging.debug(f'SignerConnection::ado_event {e}')
 
-
-
-        print('ado event', decrypted_evt.event_data())
+        print('ado event', decrypted_evt.data())
 
     def end(self):
         self._run = False
@@ -220,11 +220,12 @@ async def main(args):
     try:
         con_str = await aioconsole.ainput('connection string: ')
         parsed = urlparse(con_str)
+
         query_args = parse_qs(parsed.query)
+        comm_k = None
+        if parsed.scheme == 'nostrconnect':
+            comm_k = parsed.netloc
 
-        print(query_args)
-
-        comm_k = parsed.netloc
         relay = query_args['relay'][0]
 
         print(f'comm pub_k: {comm_k}')
@@ -234,7 +235,7 @@ async def main(args):
         use_profile = my_alias.get_profile('monty')
 
         my_sign_con = SignerConnection(signer=BasicKeySigner(key=use_profile.keys),
-                                       comm_k=comm_k,
+                                       comm_k=None,
                                        relay=relay)
 
         def sigint_handler(signal, frame):
@@ -243,7 +244,8 @@ async def main(args):
 
         signal.signal(signal.SIGINT, sigint_handler)
 
-        await my_sign_con.request_connect()
+        if comm_k is not None:
+            await my_sign_con.request_connect()
 
         while True:
             await asyncio.sleep(0.1)

@@ -1020,7 +1020,7 @@ async def main(args):
             last_event_track.do_event(the_client, sub_id, events)
 
         # called at query completetion - which might not be until timeout if we have bad relays
-        def first_pull_complete():
+        def first_pull_complete(events: [Event]):
             nonlocal keep_running
             keep_running = exit == 'never'
             if keep_running:

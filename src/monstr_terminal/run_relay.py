@@ -418,7 +418,7 @@ async def main(args):
 
 
 class TORService:
-
+    # TODO: this can be removed with updated monstr, have moved it into monstr.relay.tor
     def __init__(self, relay_port, service_dir=None, password=None, isSSL = False, empheral=True):
         try:
             if Controller:
