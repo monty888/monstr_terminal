@@ -1,5 +1,7 @@
 import logging
 import asyncio
+from json import JSONDecodeError
+
 import aioconsole
 import sys
 import signal
@@ -13,6 +15,7 @@ from monstr.event.event import Event
 from monstr.signing import BasicKeySigner, SignerInterface
 from monstr.ident.alias import ProfileFileAlias
 from monstr.util import util_funcs
+from monstr.encrypt import Keys
 
 WORK_DIR = f'{Path.home()}/.nostrpy/'
 
@@ -21,6 +24,10 @@ NIP46_KIND = 24133
 
 def get_args():
     return {}
+
+
+class SignerException(Exception):
+    pass
 
 
 class SignerConnection(EventHandler):
@@ -68,7 +75,12 @@ class SignerConnection(EventHandler):
 
         content = json.dumps({
             'id': 'somerndstring',
-            'result': ['describe', 'get_public_key', 'sign_event', 'connect'],
+            'result': ['describe',
+                       'get_public_key',
+                       'sign_event',
+                       'nip04_encrypt',
+                       'nip04_decrypt',
+                       'connect'],
             'error': None
         })
 
@@ -105,11 +117,13 @@ class SignerConnection(EventHandler):
 
         return ret
 
-    async def _do_response(self, result, error: str = None, id: str = None):
-        if id is None:
-            id = util_funcs.get_rnd_hex_str(8)
+    async def _do_response(self, result: str = None, error: str = None, id: str = None):
+        if result is None:
+            result = ''
         if error is None:
             error = ''
+        if id is None:
+            id = util_funcs.get_rnd_hex_str(8)
 
         evt = await self._get_msg_event(json.dumps({
             'id': id,
@@ -141,8 +155,6 @@ class SignerConnection(EventHandler):
         if self._comm_k is None:
             self._comm_k = params[0]
 
-        print('cool we use', self._comm_k)
-
         await self._do_response(result=await self._signer.get_public_key(),
                                 id=id)
 
@@ -158,16 +170,80 @@ class SignerConnection(EventHandler):
         await self._do_response(result=await self._signer.get_public_key(),
                                 id=id)
 
-    async def nip04_decrypt(self, id: str, params: [str]):
-        plain_text = f'unable to decrypt as {await self._signer.get_public_key()}'
+    async def nip04_encrypt(self, id: str, params: [str]):
+        try:
+            n_params = len(params)
+            if n_params < 2:
+                raise SignerException(
+                    f'Signer::nip04_encrypt: requires 2 params got {n_params} - from key and ciper text')
 
-        await self._do_response(result=plain_text,
-                                id=id)
+            to_k = params[0]
+            plain_text = params[1]
+            if not Keys.is_hex_key(to_k):
+                raise SignerException(
+                    f'Signer::nip04_encrypt: from key is not valid {to_k}')
+
+            ciper_text = await self._signer.nip4_encrypt(plain_text=plain_text,
+                                                         to_pub_k=to_k)
+
+            await self._do_response(result=ciper_text,
+                                    id=id)
+
+        except SignerException as se:
+            await self._do_response(error=str(se),
+                                    id=id)
+        except Exception as e:
+            await self._do_response(error=f'Signer::nip04_encrypt:'
+                                          f'unable to decrypt as {await self._signer.get_public_key()}'
+                                          f' error - {str(e)}',
+                                    id=id)
+
+    async def nip04_decrypt(self, id: str, params: [str]):
+        try:
+            n_params = len(params)
+            if n_params < 2:
+                raise SignerException(
+                    f'Signer::nip04_decrypt: requires 2 params got {n_params} - from key and ciper text')
+
+            from_k = params[0]
+            payload = params[1]
+            if not Keys.is_hex_key(from_k):
+                raise SignerException(
+                    f'Signer::nip04_decrypt: from key is not valid {from_k}')
+
+            plain_text = await self._signer.nip4_decrypt(payload=payload,
+                                                   for_pub_k=from_k)
+
+            await self._do_response(result=plain_text,
+                                    id=id)
+
+        except SignerException as se:
+            await self._do_response(error=str(se),
+                                    id=id)
+        except Exception as e:
+            await self._do_response(error=f'Signer::nip04_decrypt:'
+                                          f'unable to decrypt as {await self._signer.get_public_key()}'
+                                          f' error - {str(e)}',
+                                    id=id)
 
     async def sign_event(self, id: str, params: [str]):
-        event = json.loads(params[0])
-        print(event)
-        print('request to sign event', params)
+        try:
+            evt_data = json.loads(params[0])
+            event = Event.load(evt_data)
+
+            await self._signer.sign_event(event)
+            await self._do_response(result=json.dumps(event.data()),
+                                    id=id)
+
+        except JSONDecodeError as je:
+            await self._do_response(error=f'Signer::sign_event: bad event JSON - {je}',
+                                    id=id)
+        except Exception as e:
+            await self._do_response(error=f'Signer::sign_event: {e}',
+                                    id=id)
+
+
+
 
     async def _my_event_consumer(self):
         while self._run:
@@ -202,7 +278,9 @@ class SignerConnection(EventHandler):
                               'describe',
                               'get_public_key',
                               'nip04_decrypt',
+                              'nip04_encrypt',
                               'sign_event'}:
+
                     await getattr(self, method)(id, params)
 
         except Exception as e:
