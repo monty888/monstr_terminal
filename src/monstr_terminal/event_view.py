@@ -15,7 +15,7 @@ from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, \
 from monstr.util import util_funcs, ConfigError
 from monstr.inbox import Inbox
 from monstr.encrypt import Keys
-from monstr.signing import SignerInterface, BasicKeySigner
+from monstr.signing.signing import SignerInterface, BasicKeySigner
 from monstr.event.event import Event
 from monstr_terminal.cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
 from monstr_terminal.util import load_toml, get_keys_from_str

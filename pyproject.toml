@@ -22,7 +22,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "monstr>=0.1.5",
+    "monstr>=0.1.6",
     "prompt_toolkit>=3.0.38",
     "toml>=0.10.2",
 ]

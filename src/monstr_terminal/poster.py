@@ -11,7 +11,7 @@ from monstr_terminal.app.post import PostApp
 from monstr.inbox import Inbox
 from monstr_terminal.cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
-from monstr.signing import BasicKeySigner, SignerInterface
+from monstr.signing.signing import BasicKeySigner, SignerInterface
 from monstr.util import util_funcs, ConfigError
 from monstr_terminal.util import load_toml
 

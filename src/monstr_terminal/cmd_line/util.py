@@ -11,7 +11,7 @@ from monstr.inbox import Inbox
 from monstr.client.client import Client
 from monstr.ident.profile import Profile, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import ProfileEventHandler
-from monstr.signing import SignerInterface
+from monstr.signing.signing import SignerInterface
 from monstr.entities import Entities
 from monstr.util import util_funcs
 
