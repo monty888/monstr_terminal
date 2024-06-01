@@ -1,3 +1,4 @@
+import datetime
 import logging
 import asyncio
 import aioconsole
@@ -10,7 +11,7 @@ from monstr.encrypt import Keys
 from monstr_terminal.util import load_toml, get_keys_from_str
 from monstr.util import ConfigError
 from monstr.signing.signing import BasicKeySigner
-from monstr.signing.nip46 import NIP46ServerConnection
+from monstr.signing.nip46 import NIP46ServerConnection, NIP46AuthoriseInterface
 
 # work dir, we'll try and create if it doesn't exist
 WORK_DIR = f'{Path.home()}/.nostrpy/'
@@ -24,6 +25,34 @@ CONFIG_FILE = WORK_DIR + 'signer.toml'
 RELAYS = 'ws://localhost:8081'
 # user to sign as when using remote style connect
 AS_USER = None
+
+
+class BooleanAuthorise(NIP46AuthoriseInterface):
+
+    async def authorise(self, method: str, id: str, params: [str]) -> bool:
+        print('method', method)
+        print('params', params)
+        accept = await aioconsole.ainput('authorise y/n? ')
+        return accept.lower() == 'y'
+
+
+class TimedAuthorise(BooleanAuthorise):
+
+    def __init__(self, auth_mins = 10):
+        self._last_auth_at = None
+        self._auth_delta = datetime.timedelta(minutes=auth_mins)
+
+    async def authorise(self, method: str, id: str, params: [str]) -> bool:
+        now = datetime.datetime.now()
+        ret = True
+
+        # maybe we need to reauth?
+        if self._last_auth_at is None or (now - self._last_auth_at) > self._auth_delta:
+            ret = await super().authorise(method, id, params)
+            if ret:
+                self._last_auth_at = now
+
+        return ret
 
 
 def get_cmdline_args(args) -> dict:
@@ -44,6 +73,10 @@ def get_cmdline_args(args) -> dict:
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                         encrypted events will be left encrypted, 
                         default[{args['as_user']}]""")
+
+    parser.add_argument('--auth', action='store', default=args['auth'],
+                        help=f'action on receiving requests to perform signing operations '
+                             f'all - always accept, ask - always ask or int value to ask every n minutes, default[{args["auth"]}]')
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
     ret = parser.parse_args()
 
@@ -65,6 +98,7 @@ def get_args() -> dict:
         'conf': CONFIG_FILE,
         'relay': RELAYS,
         'as_user': AS_USER,
+        'auth': 'all',
         'debug': False
     }
 
@@ -88,6 +122,13 @@ def get_args() -> dict:
     if not ret['as_user']:
         print('Required argument relay is missing. Use -a or --as_user')
         exit(1)
+
+    auth = ret['auth'].lower()
+    if auth not in ('all','ask'):
+        try:
+            ret['auth'] = int(auth)
+        except ValueError:
+            raise ConfigError(f'auth most be all, ask or interger value got - {auth}')
 
     return ret
 
@@ -117,12 +158,25 @@ async def main(args):
 
         relays = args['relay'].split(',')
 
+        # create the authoriser if any, this decide how we ask user to proceed on requests for sign ops
+        my_auth = None
+        auth_type = args['auth']
+        if auth_type == 'ask':
+            print('all operations will require manual authorisation')
+            my_auth = BooleanAuthorise()
+        elif isinstance(auth_type, int):
+            my_auth = TimedAuthorise(auth_mins=auth_type)
+            print(f'operations will require manual authorisation every {auth_type} minutes')
+        else:
+            print(f'operations will always be authorised')
+
         # print out the information needed to connect
         print(f'connect with: {make_connect_str(as_user, relays)}')
 
         my_sign_con = NIP46ServerConnection(signer=BasicKeySigner(key=as_user),
                                             comm_k=None,
-                                            relay=relays[0])
+                                            relay=relays[0],
+                                            authoriser=my_auth)
 
         def sigint_handler(signal, frame):
             my_sign_con.end()
@@ -143,7 +197,7 @@ async def main(args):
 
 
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.ERROR)
+    logging.getLogger().setLevel(logging.INFO)
     try:
         asyncio.run(main(get_args()))
     except ConfigError as ce:
