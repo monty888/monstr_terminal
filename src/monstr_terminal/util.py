@@ -4,9 +4,10 @@ import sys
 from pathlib import Path
 from toml import TomlDecodeError
 import os
-from monstr.ident.alias import ProfileFileAlias
 from monstr.encrypt import Keys
 from monstr.util import ConfigError
+from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter, KeystoreInterface
+from getpass import getpass
 
 
 def load_toml(filename, dir):
@@ -32,13 +33,13 @@ def load_toml(filename, dir):
     return ret
 
 
-def get_keys_from_str(keys: str,
-                      private_only=False,
-                      single_only=False,
-                      alias_map: ProfileFileAlias = None) -> [Keys]:
+async def get_keys_from_str(keys: str,
+                            private_only=False,
+                            single_only=False,
+                            key_store: KeystoreInterface = None) -> [Keys]:
     """
     get Key objects from string e.g. that can be npub,nsec or alias and may be mutiple seperated by comma
-    :param alias_map:
+    :param key_store:
     :param keys:            , seperated nsec/npub
     :param private_only:    only accept nsec
     :param single_only:     only a single key
@@ -50,22 +51,33 @@ def get_keys_from_str(keys: str,
         keys = keys.split(',')
 
     ret = []
-    for c_key in keys:
+    for k_str in keys:
         # maybe have flag to allow hex keys but for now just nsec/npub as it's so easy to leak the priv_k otherwise!
-        if Keys.is_bech32_key(c_key):
-            the_key = Keys.get_key(c_key)
+        if Keys.is_bech32_key(k_str):
+            k = Keys.get_key(k_str)
 
-        # is it an alias?
-        elif alias_map:
-            p: Profile = alias_map.get_profile(c_key)
-            if p:
-                the_key = p.keys
-            else:
-                raise ConfigError(f'{c_key} doesn\'t look like a nsec/npub nostr key or alias not found')
+        # is it an alias - check the keystore if we've been given one
+        elif key_store:
+            k = await key_store.get(k_str)
+
+            if k is None:
+                raise ConfigError(f'{k_str} doesn\'t look like a nsec/npub nostr key or alias not found')
         else:
-            raise ConfigError(f'{c_key} doesn\'t look like a nsec/npub nostr key')
+            raise ConfigError(f'{k_str} doesn\'t look like a nsec/npub nostr key')
 
-        if private_only and the_key.private_key_hex() is None:
-            raise ConfigError(f'{c_key} is not a private key')
-        ret.append(the_key)
+        if private_only and k.private_key_hex() is None:
+            raise ConfigError(f'{k_str} is not a private key')
+        ret.append(k)
     return ret
+
+
+def get_sqlite_key_store(db_file):
+    # human alias to keys
+    # keystore for user key aliases
+    async def get_key() -> str:
+        # get password to unlock keystore
+        return getpass('keystore key: ')
+
+    key_enc = KeyDataEncrypter(get_key=get_key)
+    return SQLiteKeyStore(file_name=db_file,
+                          encrypter=key_enc)

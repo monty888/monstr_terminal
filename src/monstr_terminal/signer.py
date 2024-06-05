@@ -6,9 +6,8 @@ import sys
 import signal
 import argparse
 from pathlib import Path
-from monstr.ident.alias import ProfileFileAlias
 from monstr.encrypt import Keys
-from monstr_terminal.util import load_toml, get_keys_from_str
+from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store
 from monstr.util import ConfigError
 from monstr.signing.signing import BasicKeySigner
 from monstr.signing.nip46 import NIP46ServerConnection, NIP46AuthoriseInterface
@@ -17,6 +16,8 @@ from monstr.signing.nip46 import NIP46ServerConnection, NIP46AuthoriseInterface
 WORK_DIR = f'{Path.home()}/.nostrpy/'
 # a toml file to get args from, can be overridden from cmd line
 CONFIG_FILE = WORK_DIR + 'signer.toml'
+# filename for key store
+KEY_STORE_DB_FILE = 'keystore.db'
 
 # from relays and as_user the connect str is created
 # e.g. bunker://AS_USER_HEX_PUB?relay=RELAY1&RELAY2 etc
@@ -66,20 +67,21 @@ def get_cmdline_args(args) -> dict:
                         help=f'name com TOML file to use for configuration, default[{args["conf"]}]')
     parser.add_argument('--work-dir', action='store', default=args['work_dir'],
                         help=f'base dir for files used if full path isn\'t given, default[{args["work_dir"]}]')
-    parser.add_argument('-r', '--relay', action='store', default=args['relay'],
-                        help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
-    parser.add_argument('-a', '--as-user', action='store', default=args['as_user'],
+    parser.add_argument('user', action='store', default=args['as_user'],
+                        nargs='?',
                         help=f"""
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
-                        encrypted events will be left encrypted, 
+                        encrypted events will be left encrypted,
                         default[{args['as_user']}]""")
-
+    parser.add_argument('-r','--relay',
+                        action='store',
+                        default=args['relay'],
+                        help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
     parser.add_argument('--auth', action='store', default=args['auth'],
                         help=f'action on receiving requests to perform signing operations '
                              f'all - always accept, ask - always ask or int value to ask every n minutes, default[{args["auth"]}]')
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
     ret = parser.parse_args()
-
     return vars(ret)
 
 
@@ -119,9 +121,11 @@ def get_args() -> dict:
         print('Required argument relay is missing. Use -r or --relay')
         exit(1)
 
+    # force get a user
     if not ret['as_user']:
-        print('Required argument relay is missing. Use -a or --as_user')
-        exit(1)
+        ret['as_user'] = input('as user: ')
+        # print('Required argument relay is missing. Use -a or --as_user')
+        # exit(1)
 
     auth = ret['auth'].lower()
     if auth not in ('all','ask'):
@@ -132,8 +136,10 @@ def get_args() -> dict:
 
     return ret
 
+
 def make_connect_str(as_user:Keys, relays: [str]):
     return f'bunker://{as_user.public_key_hex()}?relay={"&".join(relays)}'
+
 
 async def main(args):
     """
@@ -150,11 +156,11 @@ async def main(args):
     try:
         # TODO: make a proper keymap store and store the keys encryted
         # with at least the option of using password to unencrypt
-        alias_map = ProfileFileAlias(f'{WORK_DIR}profiles.csv')
+        key_store = get_sqlite_key_store(db_file=WORK_DIR+KEY_STORE_DB_FILE)
 
-        as_user = get_keys_from_str(keys=args['as_user'],
-                                    private_only=True,
-                                    alias_map=alias_map)[0]
+        as_user = (await get_keys_from_str(keys=args['as_user'],
+                                           private_only=True,
+                                           key_store=key_store))[0]
 
         relays = args['relay'].split(',')
 

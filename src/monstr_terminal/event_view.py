@@ -7,7 +7,6 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from monstr.ident.profile import Profile, Contact, NIP5Helper, NIP5Error
 from monstr.ident.event_handlers import NetworkedProfileEventHandler, ProfileEventHandlerInterface
-from monstr.ident.alias import ProfileFileAlias
 from monstr.ident.profile import ContactList
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import DeduplicateAcceptor, LengthAcceptor, \
@@ -18,11 +17,15 @@ from monstr.encrypt import Keys
 from monstr.signing.signing import SignerInterface, BasicKeySigner
 from monstr.event.event import Event
 from monstr_terminal.cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
-from monstr_terminal.util import load_toml, get_keys_from_str
+from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store
+from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter
+from getpass import getpass
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
 WORK_DIR = f'{Path.home()}/.nostrpy/'
+# filename for key store
+KEY_STORE_DB_FILE = 'keystore.db'
 # relay/s to attach to
 RELAYS = None
 # user to view as
@@ -85,15 +88,15 @@ async def get_from_config(config,
     tags = config['tags']
     contacts = config['contacts']
 
-    # TODO allow the alias file to be changed
-    alias_file = '%sprofiles.csv' % WORK_DIR
-    alias_map = ProfileFileAlias(alias_file)
+    # keystore for user key aliases
+    key_store = get_sqlite_key_store(WORK_DIR+KEY_STORE_DB_FILE)
+
     # user we're viewing as
     if config['as_user'] is not None:
-        user_key = get_keys_from_str(config['as_user'],
-                                     private_only=False,
-                                     single_only=True,
-                                     alias_map=alias_map)[0]
+        user_key = (await get_keys_from_str(config['as_user'],
+                                            private_only=False,
+                                            single_only=True,
+                                            key_store=key_store))[0]
         # if we were given a private key then we can create a basic signer
         # so in future this could be something else e.g something external like nsec bunker
         # or hardware device (though that'd probably be pain just for viewing unless it
@@ -126,10 +129,10 @@ async def get_from_config(config,
 
     # addtional profiles to view other than current profile
     if config['view_extra']:
-        view_keys = get_keys_from_str(config['view_extra'],
-                                      private_only=False,
-                                      single_only=False,
-                                      alias_map=alias_map)
+        view_keys = (await get_keys_from_str(config['view_extra'],
+                                             private_only=False,
+                                             single_only=False,
+                                             key_store=key_store))
 
         view_ps = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
                                                       create_missing=True)
@@ -143,10 +146,10 @@ async def get_from_config(config,
         # if as_user is None:
         #     raise ConfigException('inbox can only be used with as_user set')
 
-        inbox_keys = get_keys_from_str(config['via'],
-                                       private_only=True,
-                                       single_only=False,
-                                       alias_map=alias_map)
+        inbox_keys = (await get_keys_from_str(config['via'],
+                                              private_only=True,
+                                              single_only=False,
+                                              key_store=key_store))
         # look up inbox profiles, only done to see if they have a name other than using the pubk
         inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
                                                       create_missing=True)

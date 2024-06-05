@@ -4,7 +4,6 @@ from pathlib import Path
 import argparse
 from monstr.ident.profile import Profile
 from monstr.ident.event_handlers import NetworkedProfileEventHandler
-from monstr.ident.alias import ProfileFileAlias
 from monstr.client.client import ClientPool, Client
 from monstr.event.event import Event
 from monstr_terminal.app.post import PostApp
@@ -13,28 +12,28 @@ from monstr_terminal.cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys
 from monstr.signing.signing import BasicKeySigner, SignerInterface
 from monstr.util import util_funcs, ConfigError
-from monstr_terminal.util import load_toml
+from monstr_terminal.util import load_toml, get_sqlite_key_store
+from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter, KeystoreInterface
+from getpass import getpass
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
 WORK_DIR = f'{Path.home()}/.nostrpy/'
+# filename for key store
+KEY_STORE_DB_FILE = 'keystore.db'
 # relay/s to attach to
 RELAYS = 'ws://localhost:8081'
-# lookup profiles here
-ALIAS_FILE = f'{WORK_DIR}profiles.csv'
 # config from toml file
 CONFIG_FILE = f'{WORK_DIR}poster.toml'
 # default kind for inbox wrap events
 INBOX_KIND = Event.KIND_ENCRYPT
 
 
-def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) -> Keys:
+async def create_key(key_val: str, for_desc: str, key_store: KeystoreInterface = None) -> Keys:
     try:
         ret = Keys.get_key(key_val)
-        if ret is None and alias_map:
-            p = alias_map.get_profile(key_val)
-            if p:
-                ret = p.keys
+        if ret is None and key_store:
+            ret = await key_store.get(key_val)
 
         if ret is None:
             raise Exception()
@@ -47,30 +46,32 @@ def create_key(key_val: str, for_desc: str, alias_map: ProfileFileAlias = None) 
     return ret
 
 
-def get_user_signer(user: str, alias_map: ProfileFileAlias = None) -> SignerInterface:
+async def get_user_signer(user: str,
+                          for_desc: str = None,
+                          key_store: KeystoreInterface = None) -> SignerInterface:
 
     if user is None:
         raise ConfigError('no user supplied')
     elif user == '?':
         adhoc_k = Keys()
         ret = BasicKeySigner(adhoc_k)
-        print(f'created adhoc key - {adhoc_k.public_key_hex()}/{adhoc_k.public_key_bech32()}')
+        print(f'created adhoc key for {for_desc} - {adhoc_k.private_key_bech32()}')
     else:
-        ret = BasicKeySigner(create_key(user, 'user', alias_map))
+        ret = BasicKeySigner(await create_key(key_val=user,
+                                              for_desc=for_desc,
+                                              key_store=key_store))
 
     return ret
 
 
-def get_to_keys(to_users: [str], ignore_missing: bool, alias_map: ProfileFileAlias = None) -> [Keys]:
+async def get_to_keys(to_users: [str], ignore_missing: bool, key_store: KeystoreInterface = None) -> [Keys]:
     ret = []
     if to_users is not None:
         for c_to in to_users:
             try:
                 cu_key = Keys.get_key(c_to)
-                if cu_key is None and alias_map:
-                    p = alias_map.get_profile(c_to)
-                    if p:
-                        cu_key = p.keys
+                if cu_key is None and key_store:
+                    cu_key = await key_store.get(c_to)
 
                 if cu_key is None:
                     raise Exception()
@@ -387,7 +388,7 @@ def get_args() -> dict:
         'tags': None,
         'message': None,
         'loop': False,
-        'alias_file': ALIAS_FILE,
+        'alias_file': KEY_STORE_DB_FILE,
         'debug': False
     }
 
@@ -461,27 +462,28 @@ async def main(args):
     # tags if any to be added to posts
     tags = args['tags']
 
-    # file used to lookup aliases
-    alias_file = args['alias_file']
-
-    # human alias to keys
-    key_alias = ProfileFileAlias(alias_file)
+    # keystore for user key aliases
+    key_store = get_sqlite_key_store(WORK_DIR+args['alias_file'])
 
     if loop is False and not message:
         raise ConfigError('no message supplied to post')
 
-    user_signer = get_user_signer(user,
-                                  alias_map=key_alias)
+    user_signer = await get_user_signer(user=user,
+                                        for_desc='user',
+                                        key_store=key_store)
 
     if is_encrypt and to_users is None:
         raise ConfigError('to users is required for encrypted messages')
 
-    to_keys = get_to_keys(to_users, ignore_missing,
-                          alias_map=key_alias)
+    to_keys = await get_to_keys(to_users=to_users,
+                                ignore_missing=ignore_missing,
+                                key_store=key_store)
 
     inbox_signer = None
     if inbox:
-        inbox_signer = get_user_signer(inbox, alias_map=key_alias)
+        inbox_signer = await get_user_signer(user=inbox,
+                                             for_desc='inbox',
+                                             key_store=key_store)
 
     if loop is False:
         await post_single(relays=relays,

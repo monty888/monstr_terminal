@@ -11,7 +11,7 @@ from monstr.event.event import Event
 from monstr.ident.profile import Profile
 from monstr.ident.event_handlers import ProfileEventHandlerInterface
 from monstr.inbox import Inbox
-from monstr.signing import SignerInterface
+from monstr.signing.signing import SignerInterface
 from monstr.encrypt import Keys
 
 
