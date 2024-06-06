@@ -6,10 +6,10 @@
   from nostr without having to implement a full client.
 
     Usage when you use a config file:
-        $ ./python3 event_view.py -o json | ./event_view_consumer.py
+        $ ./python3 view.py -o json | ./view_consumer.py
 
     or, if you want to use a specific  nostr relay instance:
-        $ python3 event_view.py -r wss://nos.lol -o json | python3 event_view_consumer.py
+        $ python3 view.py -r wss://nos.lol -o json | python3 view_consumer.py
 """
 
 import fileinput

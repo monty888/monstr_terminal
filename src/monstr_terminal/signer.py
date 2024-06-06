@@ -6,7 +6,7 @@ import sys
 import signal
 import argparse
 from pathlib import Path
-from monstr.encrypt import Keys
+from monstr.encrypt import Keys, DecryptionException
 from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store
 from monstr.util import ConfigError
 from monstr.signing.signing import BasicKeySigner
@@ -25,25 +25,46 @@ KEY_STORE_DB_FILE = 'keystore.db'
 # relay/s to attach to when bunker style remote connect
 RELAYS = 'ws://localhost:8081'
 # user to sign as when using remote style connect
-AS_USER = None
+USER = None
+# print info on each event we get request to sign
+VERBOSE = False
+
+
+def print_auth_info(method:str, params:dict):
+    print('method', method)
+    print('params', params)
+
+
+class AuthoriseAll(NIP46AuthoriseInterface):
+
+    def __init__(self, verbose: bool = False):
+        self._verbose = verbose
+
+    async def authorise(self, method: str, id: str, params: [str]) -> bool:
+        if self._verbose:
+            print_auth_info(method, params)
+        return True
 
 
 class BooleanAuthorise(NIP46AuthoriseInterface):
 
     async def authorise(self, method: str, id: str, params: [str]) -> bool:
-        print('method', method)
-        print('params', params)
+        # always verbose
+        print_auth_info(method, params)
         accept = await aioconsole.ainput('authorise y/n? ')
         return accept.lower() == 'y'
 
 
 class TimedAuthorise(BooleanAuthorise):
 
-    def __init__(self, auth_mins = 10):
+    def __init__(self, auth_mins = 10, verbose: bool = False):
         self._last_auth_at = None
         self._auth_delta = datetime.timedelta(minutes=auth_mins)
+        self._verbose = verbose
 
     async def authorise(self, method: str, id: str, params: [str]) -> bool:
+        if self._verbose:
+            print_auth_info(method, params)
         now = datetime.datetime.now()
         ret = True
 
@@ -60,26 +81,36 @@ def get_cmdline_args(args) -> dict:
     parser = argparse.ArgumentParser(
         prog='signer.py',
         description="""
-            A NIP46 client
+            A NIP46 server - signs events on behalf of another client
             """
     )
     parser.add_argument('-c', '--conf', action='store', default=args['conf'],
                         help=f'name com TOML file to use for configuration, default[{args["conf"]}]')
     parser.add_argument('--work-dir', action='store', default=args['work_dir'],
                         help=f'base dir for files used if full path isn\'t given, default[{args["work_dir"]}]')
-    parser.add_argument('user', action='store', default=args['as_user'],
+    parser.add_argument('user', action='store', default=args['user'],
                         nargs='?',
                         help=f"""
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                         encrypted events will be left encrypted,
-                        default[{args['as_user']}]""")
-    parser.add_argument('-r','--relay',
+                        default[{args['user']}]""")
+    parser.add_argument('-r', '--relay',
                         action='store',
                         default=args['relay'],
                         help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
-    parser.add_argument('--auth', action='store', default=args['auth'],
+    parser.add_argument('-a', '--auth',
+                        action='store',
+                        default=args['auth'],
                         help=f'action on receiving requests to perform signing operations '
                              f'all - always accept, ask - always ask or int value to ask every n minutes, default[{args["auth"]}]')
+    parser.add_argument('-v', '--verbose',
+                        action='store_true',
+                        help=f'print info on each event that is requested to sign, default[{args["verbose"]}]',
+                        default=args['verbose'])
+    parser.add_argument('--no-verbose',
+                        action='store_false',
+                        help='turn off verbose',
+                        default=not args['verbose'])
     parser.add_argument('-d', '--debug', action='store_true', help='enable debug output', default=args['debug'])
     ret = parser.parse_args()
     return vars(ret)
@@ -99,16 +130,22 @@ def get_args() -> dict:
         'work_dir': WORK_DIR,
         'conf': CONFIG_FILE,
         'relay': RELAYS,
-        'as_user': AS_USER,
+        'user': USER,
         'auth': 'all',
-        'debug': False
+        'verbose': VERBOSE,
+        'debug': False,
+        'keystore': {
+            'filename': WORK_DIR + KEY_STORE_DB_FILE,
+            'password': None
+        }
     }
 
     # only done to get the work-dir and conf options if set
     ret.update(get_cmdline_args(ret))
     # now form config file if any
-    ret.update(load_toml(ret['conf'], ret['work_dir']))
-    #
+    load_toml(filename=ret['conf'],
+              dir=ret['work_dir'],
+              current_args=ret)
     # # 2pass so that cmdline options override conf file options
     # ret.update(get_cmdline_args(ret))
 
@@ -122,23 +159,21 @@ def get_args() -> dict:
         exit(1)
 
     # force get a user
-    if not ret['as_user']:
-        ret['as_user'] = input('as user: ')
-        # print('Required argument relay is missing. Use -a or --as_user')
-        # exit(1)
+    if not ret['user']:
+        ret['user'] = input('as user: ')
 
     auth = ret['auth'].lower()
-    if auth not in ('all','ask'):
+    if auth not in ('all', 'ask'):
         try:
             ret['auth'] = int(auth)
         except ValueError:
-            raise ConfigError(f'auth most be all, ask or interger value got - {auth}')
+            raise ConfigError(f'auth most be all, ask or integer value got - {auth}')
 
     return ret
 
 
-def make_connect_str(as_user:Keys, relays: [str]):
-    return f'bunker://{as_user.public_key_hex()}?relay={"&".join(relays)}'
+def make_connect_str(keys: Keys, relays: [str]):
+    return f'bunker://{keys.public_key_hex()}?relay={"&".join(relays)}'
 
 
 async def main(args):
@@ -154,32 +189,38 @@ async def main(args):
             test with other implementations as find them
     """
     try:
-        # TODO: make a proper keymap store and store the keys encryted
-        # with at least the option of using password to unencrypt
-        key_store = get_sqlite_key_store(db_file=WORK_DIR+KEY_STORE_DB_FILE)
+        # store of aliases to keys
+        key_store = get_sqlite_key_store(db_file=args['keystore']['filename'],
+                                         password=args['keystore']['password'])
 
-        as_user = (await get_keys_from_str(keys=args['as_user'],
-                                           private_only=True,
-                                           key_store=key_store))[0]
+        # user we're signing for
+        user_k = (await get_keys_from_str(keys=args['user'],
+                                          private_only=True,
+                                          key_store=key_store))[0]
 
+        # relays to attach to
         relays = args['relay'].split(',')
 
+        # print info about events as we auth
+        verbose = args['verbose']
+
         # create the authoriser if any, this decide how we ask user to proceed on requests for sign ops
-        my_auth = None
         auth_type = args['auth']
+
         if auth_type == 'ask':
             print('all operations will require manual authorisation')
             my_auth = BooleanAuthorise()
         elif isinstance(auth_type, int):
-            my_auth = TimedAuthorise(auth_mins=auth_type)
+            my_auth = TimedAuthorise(auth_mins=auth_type, verbose=verbose)
             print(f'operations will require manual authorisation every {auth_type} minutes')
         else:
+            my_auth = AuthoriseAll(verbose=verbose)
             print(f'operations will always be authorised')
 
         # print out the information needed to connect
-        print(f'connect with: {make_connect_str(as_user, relays)}')
+        print(f'connect with: {make_connect_str(user_k, relays)}')
 
-        my_sign_con = NIP46ServerConnection(signer=BasicKeySigner(key=as_user),
+        my_sign_con = NIP46ServerConnection(signer=BasicKeySigner(key=user_k),
                                             comm_k=None,
                                             relay=relays[0],
                                             authoriser=my_auth)
@@ -190,20 +231,23 @@ async def main(args):
 
         signal.signal(signal.SIGINT, sigint_handler)
 
-
-        # this is for the other style of connection where the client choses the comm
+        # this is for the other style of connection where the client chooses the comm
+        # snort used to have this style, add back in if we can find an example to test against
         # if comm_k is not None:
         #     await my_sign_con.request_connect()
 
         while True:
             await asyncio.sleep(0.1)
 
+    except ConfigError as ce:
+        print(ce)
+    except DecryptionException as de:
+        print(f'bad password or non encrypted store? - {de}')
     except Exception as e:
         print(e)
 
-
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.INFO)
+    logging.getLogger().setLevel(logging.ERROR)
     try:
         asyncio.run(main(get_args()))
     except ConfigError as ce:

@@ -10,18 +10,27 @@ from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter, KeystoreInte
 from getpass import getpass
 
 
-def load_toml(filename, dir):
+def load_toml(filename, dir, current_args):
     if os.path.sep not in filename:
         filename = dir+os.path.sep+filename
 
-    ret = {}
     f = Path(filename)
     if f.is_file():
         try:
             toml_dict = toml.load(filename)
 
             for n, v in toml_dict.items():
-                ret[n.replace('-','_')] = v
+                n = n.replace('-','_')
+                if n in current_args:
+                    c_v = current_args[n]
+                    if isinstance(c_v, dict):
+                        for k, v in v.items():
+                            c_v[k] = v
+                    else:
+                        current_args[n] = v
+
+                else:
+                    current_args[n] = v
 
         except TomlDecodeError as te:
             print(f'Error in config file {filename} -{te}')
@@ -29,8 +38,6 @@ def load_toml(filename, dir):
 
     else:
         logging.debug(f'load_toml:: no config file {filename}')
-
-    return ret
 
 
 async def get_keys_from_str(keys: str,
@@ -71,12 +78,14 @@ async def get_keys_from_str(keys: str,
     return ret
 
 
-def get_sqlite_key_store(db_file):
+def get_sqlite_key_store(db_file, password: str = None):
     # human alias to keys
     # keystore for user key aliases
     async def get_key() -> str:
-        # get password to unlock keystore
-        return getpass('keystore key: ')
+        ret = password
+        if password is None:
+            ret =  getpass('keystore key: ')
+        return ret
 
     key_enc = KeyDataEncrypter(get_key=get_key)
     return SQLiteKeyStore(file_name=db_file,

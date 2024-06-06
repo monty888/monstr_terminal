@@ -9,12 +9,14 @@ from monstr.event.event import Event
 from monstr_terminal.app.post import PostApp
 from monstr.inbox import Inbox
 from monstr_terminal.cmd_line.post_loop_app import PostAppGui
-from monstr.encrypt import Keys
+from monstr.encrypt import Keys, DecryptionException
 from monstr.signing.signing import BasicKeySigner, SignerInterface
 from monstr.util import util_funcs, ConfigError
 from monstr_terminal.util import load_toml, get_sqlite_key_store
-from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter, KeystoreInterface
-from getpass import getpass
+from monstr.ident.keystore import KeystoreInterface
+"""
+    TODO: add support for NIP44 encryption 
+"""
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
@@ -23,22 +25,20 @@ WORK_DIR = f'{Path.home()}/.nostrpy/'
 KEY_STORE_DB_FILE = 'keystore.db'
 # relay/s to attach to
 RELAYS = 'ws://localhost:8081'
+# user to post as
+USER = None
 # config from toml file
-CONFIG_FILE = f'{WORK_DIR}poster.toml'
+CONFIG_FILE = 'poster.toml'
 # default kind for inbox wrap events
 INBOX_KIND = Event.KIND_ENCRYPT
 
 
 async def create_key(key_val: str, for_desc: str, key_store: KeystoreInterface = None) -> Keys:
-    try:
-        ret = Keys.get_key(key_val)
-        if ret is None and key_store:
-            ret = await key_store.get(key_val)
+    ret = Keys.get_key(key_val)
+    if ret is None and key_store:
+        ret = await key_store.get(key_val)
 
-        if ret is None:
-            raise Exception()
-
-    except Exception as e:
+    if ret is None:
         raise ConfigError(f'unable to create {for_desc} keys using - {key_val}')
 
     if ret.private_key_hex() is None:
@@ -50,9 +50,8 @@ async def get_user_signer(user: str,
                           for_desc: str = None,
                           key_store: KeystoreInterface = None) -> SignerInterface:
 
-    if user is None:
-        raise ConfigError('no user supplied')
-    elif user == '?':
+    # special ?, we'll just create some random keys to post as
+    if user == '?':
         adhoc_k = Keys()
         ret = BasicKeySigner(adhoc_k)
         print(f'created adhoc key for {for_desc} - {adhoc_k.private_key_bech32()}')
@@ -68,20 +67,25 @@ async def get_to_keys(to_users: [str], ignore_missing: bool, key_store: Keystore
     ret = []
     if to_users is not None:
         for c_to in to_users:
-            try:
-                cu_key = Keys.get_key(c_to)
-                if cu_key is None and key_store:
-                    cu_key = await key_store.get(c_to)
+            # get rid of anyspaces
+            # TODO: keystore needs to enforce non space in key names
+            c_to = c_to.replace(' ', '')
 
-                if cu_key is None:
-                    raise Exception()
-                ret.append(cu_key)
-            except Exception as e:
+            cu_key = Keys.get_key(c_to)
+            if cu_key is None and key_store:
+                cu_key = await key_store.get(c_to)
+
+            if cu_key is None:
+                # just note
                 if ignore_missing:
-                    logging.info('unable to create keys for to_user using - %s - ignoring' % c_to)
+                    logging.info(f'unable to create keys for to_user using - {c_to} - ignoring')
+                # bug out
                 else:
-                    raise ConfigError('unable to create keys for to_user using - %s' % c_to)
+                    raise ConfigError(f'unable to create keys for to_user using - {c_to}')
+            else:
+                ret.append(cu_key)
 
+        # even with ignore_missing we need atleast 1 to user
         if not ret:
             raise ConfigError('unable to create any to user keys!')
 
@@ -135,8 +139,7 @@ async def get_inbox(inbox_sign: SignerInterface,
 
     # if given a profile handler we'll attempt to get a name for the inbox (from meta event)
     if profile_handler is not None:
-        inbox_p: Profile = await profile_handler.aget_profile(inbox_pub_k,
-                                                              create_missing=True)
+        inbox_p: Profile = await profile_handler.aget_profile(inbox_pub_k, create_missing=True)
         name = inbox_p.display_name()
 
     # actually create the inbox
@@ -264,7 +267,12 @@ async def post_loop(relays: [str],
 
         asyncio.create_task(the_client.auth(auth_sign, challenge))
 
-    async with ClientPool(relays, on_auth=on_auth) as my_client:
+
+    # EOSE based fetch of historic events doesn't work very well with multiple clients
+    # TODO: change to initial query then sub based?
+    async with ClientPool(relays,
+                          on_auth=on_auth,
+                          on_eose=on_eose) as my_client:
         peh = NetworkedProfileEventHandler(client=my_client)
         post_app = await get_poster(client=my_client,
                                     profile_handler=peh,
@@ -282,7 +290,7 @@ async def post_loop(relays: [str],
                             is_encrypt=is_encrypt)
 
         my_client.set_on_status(on_status)
-        my_client.set_on_eose(on_eose)
+        # my_client.set_on_eose(on_eose)
         my_client.set_on_connect(on_connect)
 
         # manually call the connect which just adds the sub
@@ -292,17 +300,17 @@ async def post_loop(relays: [str],
 
 def get_cmdline_args(args) -> dict:
     parser = argparse.ArgumentParser(
-        prog='poster.py',
+        prog='post.py',
         description="""
             post nostr events from the command line
             """
     )
     parser.add_argument('-r', '--relay', action='store', default=args['relay'],
                         help=f'comma separated nostr relays to connect to, default [{args["relay"]}]')
-    parser.add_argument('-a', '--as_user', action='store', default=args['as_user'],
+    parser.add_argument('-u', '--user', action='store', default=args['user'],
                         help=f"""
                         alias, priv_k of user to post as,
-                        default [{args['as_user']}]""")
+                        default [{args['user']}]""")
     parser.add_argument('-t', '--to_users', action='store', default=args['to_users'],
                         help=f"""
                         comma seperated alias, priv_k, or pub_k of user to post to,
@@ -350,7 +358,7 @@ def get_cmdline_args(args) -> dict:
     return vars(ret)
 
 
-def get_tags(tags:str)->[[]]:
+def get_tags(tags: str) -> [[]]:
     ret = None
     for c_tag in tags.split('#'):
         split_vals = c_tag.split(':')
@@ -377,7 +385,9 @@ def get_args() -> dict:
 
     ret = {
         'relay': RELAYS,
-        'as_user': None,
+        'work_dir': WORK_DIR,
+        'conf': CONFIG_FILE,
+        'user': USER,
         'to_users': None,
         'via': None,
         'format': 'default',
@@ -389,24 +399,68 @@ def get_args() -> dict:
         'message': None,
         'loop': False,
         'alias_file': KEY_STORE_DB_FILE,
+        'keystore': {
+            'filename': WORK_DIR + KEY_STORE_DB_FILE,
+            'password': None
+        },
         'debug': False
     }
 
     # now form config file if any
-    ret.update(load_toml(dir=WORK_DIR,
-                         filename=CONFIG_FILE))
+    load_toml(filename=ret['conf'],
+              dir=ret['work_dir'],
+              current_args=ret)
 
     # now from cmd line
     ret.update(get_cmdline_args(ret))
 
-    # if debug flagged enable now
-    if ret['debug'] is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.debug(f'get_args:: running with options - {ret}')
-
     # if any tags, see if we can make into anything sensible...
     if ret['tags']:
         ret['tags'] = get_tags(ret['tags'])
+
+    # if not given get a user
+    if ret['user'] is None:
+        ret['user'] = input('as user: ')
+
+    # work out if we're making encrypted posts
+    format = ret['format']
+    kind = ret['kind']
+    is_encrypt = format == 'encrypt'
+
+    # no kind given, so now we'll choose one, maybe overwrite is_encrypt
+    if kind is None:
+        if format in {'encrypt', 'default'}:
+            kind = 4
+            is_encrypt = True
+        else:
+            kind = 1
+    # kind has been given, for format default we'll now override is_encrypt
+    else:
+        # default which is encrypt only for kind 4
+        if format == 'default':
+            is_encrypt = kind == 4
+
+    ret['is_encrypt'] = is_encrypt
+    ret['kind'] = kind
+
+    # to users are required for encypted msgs, so ask for to users!
+    if is_encrypt and ret['to_users'] is None:
+        ret['to_users'] = input('to users: ')
+
+    # if we msg we reduce any spacing, maybe we shouldn't bother?
+    if ret['message']:
+        ret['message'] = ' '.join(ret['message'])
+
+    # msg isn't required in loop mode - in fact it's ignored.. maybe we should still send it if given?
+    # anyway if not loop we will need a msg
+    elif ret['loop'] is False and not ret['message']:
+        ret['message'] = input('message: ')
+
+
+    # if debug flagged enable now and output args we're running with
+    if ret['debug'] is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug(f'get_args:: running with options - {ret}')
 
     return ret
 
@@ -416,7 +470,7 @@ async def main(args):
     relays = args['relay'].split(',')
 
     # we'll post as this user
-    user = args['as_user']
+    user = args['user']
 
     # post to these users
     to_users = args['to_users']
@@ -434,47 +488,30 @@ async def main(args):
     loop = args['loop']
 
     # message text to be sent if not loop mode
-    message = ' '.join(args['message'])
+    message = args['message']
 
     # subject text for message/ each message
     subject = args['subject']
 
-    # to encrypt event content or not
-    format = args['format']
-    # if default we'll assume encrypt, but it might be overriden
-    is_encrypt = format == 'encrypt'
+    # args we encrypting? (NIP4 at the moment)
+    is_encrypt = args['is_encrypt']
     # kind of event to post by default this will be 1 for plaintxt or 4 for encrypt
     kind = args['kind']
-
-    # no kind given, so now we'll choose one, maybe overwrite is_encrypt
-    if kind is None:
-        if format in {'encrypt', 'default'}:
-            kind = 4
-            is_encrypt = True
-        else:
-            kind = 1
-    # kind has been given, for format default we'll now override is_encrypt
-    else:
-        # default which is encrypt only for kind 4
-        if format == 'default':
-            is_encrypt = kind == 4
 
     # tags if any to be added to posts
     tags = args['tags']
 
     # keystore for user key aliases
-    key_store = get_sqlite_key_store(WORK_DIR+args['alias_file'])
+    key_store = get_sqlite_key_store(db_file=WORK_DIR+args['alias_file'],
+                                     password=args['keystore']['password'])
 
-    if loop is False and not message:
-        raise ConfigError('no message supplied to post')
-
+    # user to sign are post events, eventually this might be NIP46 client
+    # (we don't have the keys locally)
     user_signer = await get_user_signer(user=user,
                                         for_desc='user',
                                         key_store=key_store)
 
-    if is_encrypt and to_users is None:
-        raise ConfigError('to users is required for encrypted messages')
-
+    # to keys, opt for plain text but required if we're encrypting
     to_keys = await get_to_keys(to_users=to_users,
                                 ignore_missing=ignore_missing,
                                 key_store=key_store)
@@ -518,6 +555,8 @@ if __name__ == "__main__":
         asyncio.run(main(get_args()))
     except ConfigError as ce:
         print(ce)
+    except DecryptionException as de:
+        print(f'bad password or non encrypted store? - {de}')
 
 
 

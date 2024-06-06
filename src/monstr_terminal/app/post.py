@@ -239,7 +239,7 @@ class PostApp:
                               msg,
                               ''.join(['-'] * 10)))
 
-    async def make_post(self, msg) -> Event:
+    async def make_post(self, msg) -> [Event]:
         """
         makes post events, a single event if plaintext or 1 per to_user if encrypted
         :param public_inbox:
@@ -250,13 +250,13 @@ class PostApp:
         :param subject:
         :return:
         """
-
         async def make_event(post_to: str = None):
             ret = Event(kind=self._kind,
                         content=msg,
                         pub_key=self._as_user_pub_k,
                         tags=tags)
-            if post_to:
+
+            if self._is_encrypt:
                 ret.content = await self._user_sign.nip4_encrypt(plain_text=ret.content,
                                                                  to_pub_k=post_to)
 
@@ -292,8 +292,9 @@ class PostApp:
                     # we leave all the p_tags - should we just restrict to who we're sending too?
                     post.append(await make_event(c_post[1]))
 
+
         except Exception as e:
-            pass
+            print(e)
 
         return post
 

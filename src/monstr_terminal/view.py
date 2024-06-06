@@ -18,8 +18,6 @@ from monstr.signing.signing import SignerInterface, BasicKeySigner
 from monstr.event.event import Event
 from monstr_terminal.cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
 from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store
-from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter
-from getpass import getpass
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
@@ -89,7 +87,8 @@ async def get_from_config(config,
     contacts = config['contacts']
 
     # keystore for user key aliases
-    key_store = get_sqlite_key_store(WORK_DIR+KEY_STORE_DB_FILE)
+    key_store = get_sqlite_key_store(db_file=config["keystore"]["filename"],
+                                     password=config["keystore"]["password"])
 
     # user we're viewing as
     if config['as_user'] is not None:
@@ -396,13 +395,20 @@ def get_args() -> dict:
         'ssl_disable_verify': None,
         'entities': False,
         'exit': EXIT,
+        'keystore': {
+            'filename': WORK_DIR + KEY_STORE_DB_FILE,
+            'password': None
+        },
         'debug': False,
     }
 
     # only done to get the work-dir and conf options if set
     ret.update(get_cmdline_args(ret))
     # now form config file if any
-    ret.update(load_toml(ret['conf'], ret['work_dir']))
+    # now form config file if any
+    load_toml(filename=ret['conf'],
+              dir=ret['work_dir'],
+              current_args=ret)
 
     # 2pass so that cmdline options override conf file options
     ret.update(get_cmdline_args(ret))
@@ -413,19 +419,17 @@ def get_args() -> dict:
         logging.debug(f'get_args:: running with options - {ret}')
 
     if not ret['relay']:
-        print('Required argument relay is missing. Use -r or --relay')
-        exit(1)
+        ret['relay'] = input('relays: ')
 
     if ret['inbox_only'] and ret['via'] is None:
-        print('inbox-only is True bit no inbox defined user -v or --via')
-        sys.exit(1)
+        ret['via'] = input('inboxes: ')
 
     return ret
 
 
 def get_cmdline_args(args) -> dict:
     parser = argparse.ArgumentParser(
-        prog='event_view.py',
+        prog='view.py',
         description="""
             view nostr events from the command line
             """
