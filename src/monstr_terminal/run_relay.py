@@ -224,8 +224,9 @@ def get_args() -> dict:
     }
 
     # now form config file if any
-    ret.update(load_toml(dir=WORK_DIR,
-                         filename=CONFIG_FILE))
+    load_toml(filename=CONFIG_FILE,
+              dir=WORK_DIR,
+              current_args=ret)
 
     # now from cmd line
     ret.update(get_cmdline_args(ret))
