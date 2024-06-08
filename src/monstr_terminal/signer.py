@@ -91,8 +91,7 @@ def get_cmdline_args(args) -> dict:
     parser.add_argument('user', action='store', default=args['user'],
                         nargs='?',
                         help=f"""
-                        alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
-                        encrypted events will be left encrypted,
+                        alias or priv_k that we are signing as
                         default[{args['user']}]""")
     parser.add_argument('-r', '--relay',
                         action='store',

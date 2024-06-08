@@ -27,12 +27,12 @@ KEY_STORE_DB_FILE = 'keystore.db'
 # relay/s to attach to
 RELAYS = None
 # user to view as
-AS_USER = None
+USER = None
 # if as user fetch contacts and add them to the view
 VIEW_CONTACTS = True
 # if query with author keys if we are looking for events sent from, sent to, or from and to those keys
 DIRECTION = 'both'
-# additional profiles to view other than as_user and anyone they follow
+# additional profiles to view other than user and anyone they follow
 VIEW_EXTRA = None
 # look in these 'inboxes' also
 INBOXES = None
@@ -77,7 +77,7 @@ def get_int_or_none(val: str, f_name: str) -> int:
 
 async def get_from_config(config,
                           profile_handler: ProfileEventHandlerInterface):
-    as_user: Profile = None
+    user: Profile = None
     as_sign: SignerInterface = None
     all_view = []
     view_extra = []
@@ -91,8 +91,8 @@ async def get_from_config(config,
                                      password=config["keystore"]["password"])
 
     # user we're viewing as
-    if config['as_user'] is not None:
-        user_key = (await get_keys_from_str(config['as_user'],
+    if config['user'] is not None:
+        user_key = (await get_keys_from_str(config['user'],
                                             private_only=False,
                                             single_only=True,
                                             key_store=key_store))[0]
@@ -103,28 +103,28 @@ async def get_from_config(config,
         if user_key.private_key_hex():
             as_sign = BasicKeySigner(user_key)
 
-        as_user = await profile_handler.aget_profile(user_key.public_key_hex(),
-                                                     create_missing=False)
-        if as_user:
-            all_view.append(as_user)
+        user = await profile_handler.aget_profile(user_key.public_key_hex(),
+                                                  create_missing=False)
+        if user:
+            all_view.append(user)
             # lookup and add contacts to view?
             if contacts:
                 c_c: Contact
-                await profile_handler.aload_contacts(as_user)
-                contacts = as_user.contacts
+                await profile_handler.aload_contacts(user)
+                contacts = user.contacts
                 if contacts:
                     contact_ps = await profile_handler.aget_profiles(pub_ks=[c_c.contact_public_key for c_c in contacts],
                                                                      create_missing=True)
                     view_contact = contact_ps.profiles
                     all_view = all_view + contact_ps.profiles
         else:
-            print(f'WARNING: unable to find as_user profile - {config["as_user"]},can\'t get follows')
+            print(f'WARNING: unable to find user profile - {config["user"]},can\'t get follows')
             # continue with stubb as_user profile
-            as_user = await profile_handler.aget_profile(user_key.public_key_hex(),
-                                                         create_missing=True)
-            as_user.contacts = ContactList(contacts=[],
-                                           owner_pub_k=as_user.public_key)
-            all_view.append(as_user)
+            user = await profile_handler.aget_profile(user_key.public_key_hex(),
+                                                      create_missing=True)
+            user.contacts = ContactList(contacts=[],
+                                        owner_pub_k=user.public_key)
+            all_view.append(user)
 
     # addtional profiles to view other than current profile
     if config['view_extra']:
@@ -141,10 +141,7 @@ async def get_from_config(config,
 
     # public inboxes for encrypted messages
     if config['via']:
-        # NOTE without as_user we can only see plain texts in this account
-        # if as_user is None:
-        #     raise ConfigException('inbox can only be used with as_user set')
-
+        # NOTE without user we can only see plain texts in this account
         inbox_keys = (await get_keys_from_str(config['via'],
                                               private_only=True,
                                               single_only=False,
@@ -189,7 +186,7 @@ async def get_from_config(config,
                 raise ConfigError(f'id mentioned event does\'t look like a valid event id {config["kinds"]}')
 
     config.update({
-        'as_user': as_user,
+        'user': user,
         'as_sign': as_sign,
         'all_view': all_view,
         'view_contact': view_contact,
@@ -369,7 +366,7 @@ def get_args() -> dict:
         'work_dir': WORK_DIR,
         'conf': CONFIG_FILE,
         'relay': RELAYS,
-        'as_user': AS_USER,
+        'user': USER,
         'as_sign': None,
         'contacts': VIEW_CONTACTS,
         'view_extra': VIEW_EXTRA,
@@ -440,11 +437,11 @@ def get_cmdline_args(args) -> dict:
                         help=f'base dir for files used if full path isn\'t given, default[{args["work_dir"]}]')
     parser.add_argument('-r', '--relay', action='store', default=args['relay'],
                         help=f'comma separated nostr relays to connect to, default[{args["relay"]}]')
-    parser.add_argument('-a', '--as-user', action='store', default=args['as_user'],
+    parser.add_argument('-u', '--user', action='store', default=args['user'],
                         help=f"""
                         alias, priv_k or pub_k of user to view as. If only created from pub_k then kind 4
                         encrypted events will be left encrypted, 
-                        default[{args['as_user']}]""")
+                        default[{args['user']}]""")
     parser.add_argument('--contacts', action='store_true',
                         help='if --as-user lookup contacts and add to view',
                         default=args['contacts'])
@@ -485,7 +482,7 @@ def get_cmdline_args(args) -> dict:
                         help=f'max number of events to return, default [{args["limit"]}]')
     parser.add_argument('-s', '--since', action='store', default=args['since'],
                         help=f'show events n hours previous to running, default [{args["since"]}]')
-    parser.add_argument('-u', '--until', action='store', default=args['until'],
+    parser.add_argument('--until', action='store', default=args['until'],
                         help=f'show events n hours after since, default [{args["until"]}]')
     parser.add_argument('--hashtag', action='store', default=args['hashtag'],
                         help=f'only events with t tag value will be matched, default[{args["hashtag"]}]')
@@ -501,7 +498,7 @@ def get_cmdline_args(args) -> dict:
     parser.add_argument('-p', '--pow', action='store', choices=[8, 12, 16, 20, 24, 28, 32], default=args['pow'],
                         type=int,
                         help=f"""
-                                        minimum amount required for events excluding contacts of as_user
+                                        minimum amount required for events excluding contacts of user
                                         default[{args['pow']}]""")
 
     parser.add_argument('-e', '--entities', action='store_true',
@@ -513,7 +510,7 @@ def get_cmdline_args(args) -> dict:
     parser.add_argument('--nip5check', action='store_true',
                         help='nip5 checked and displayed green if valid',
                         default=args['nip5check'])
-    parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of as_user',
+    parser.add_argument('-n', '--nip5', action='store_true', help='valid nip5 required for events excluding contacts of user',
                         default=args['nip5'])
     parser.add_argument('--start-mode', choices=['all', 'first'],
                         default=args['start_mode'],
@@ -540,8 +537,8 @@ def get_cmdline_args(args) -> dict:
 
     ret = parser.parse_args()
     # so --as_user opt can be overridden empty if its defined in config file
-    if ret.as_user and (ret.as_user == '' or ret.as_user.lower() == 'none'):
-        ret.as_user = None
+    if ret.user and (ret.user == '' or ret.user.lower() == 'none'):
+        ret.user = None
 
     return vars(ret)
 
@@ -742,7 +739,7 @@ async def main(args):
 
     profile_handler = NetworkedProfileEventHandler(client=my_client)
 
-    # fills in config with data from nostr, e.g. follows for any as_user
+    # fills in config with data from nostr, e.g. follows for any user
     try:
         config = await get_from_config(args, profile_handler)
     except ConfigError as ce:
@@ -755,7 +752,7 @@ async def main(args):
         sys.exit(2)
 
     # user that we running as, if this user has priv_k then where needed we'll do decryption and output plaintext
-    as_user: Profile = config['as_user']
+    user: Profile = config['user']
     as_sign = config['as_sign']
 
     # add add user contacts to view
@@ -764,7 +761,7 @@ async def main(args):
     view_contacts_profiles = config['view_contact']
     view_contacts_k = [c_p.keys for c_p in view_contacts_profiles]
 
-    # extra profiles requested to view other than contacts of as_user or inboxes
+    # extra profiles requested to view other than contacts of user or inboxes
     extra_view_profiles = config['view_extra']
     extra_view_k = [c_p.keys for c_p in extra_view_profiles]
 
@@ -890,7 +887,7 @@ async def main(args):
     # show run info except if we're outputting json
     if output != 'json':
         await print_run_info(relay=relay,
-                             as_user=as_user,
+                             as_user=user,
                              contacts=view_contacts,
                              extra_view_profiles=extra_view_profiles,
                              inboxes=inboxes,
@@ -946,7 +943,7 @@ async def main(args):
 
         my_printer = FormattedEventPrinter(profile_handler=profile_handler,
                                            as_sign=as_sign,
-                                           as_user=as_user,
+                                           as_user=user,
                                            inboxes=inboxes,
                                            show_pub_key=show_pubkey,
                                            show_tags=show_tags,
@@ -967,7 +964,7 @@ async def main(args):
 
     #
     my_classifier = MyClassifier(event_ids=mention_eids,
-                                 as_user=as_user,
+                                 as_user=user,
                                  view_contacts=view_contacts,
                                  view_profiles=view_profiles,
                                  public_inboxes=inboxes)
