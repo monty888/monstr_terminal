@@ -171,10 +171,6 @@ def get_args() -> dict:
     return ret
 
 
-def make_connect_str(keys: Keys, relays: [str]):
-    return f'bunker://{keys.public_key_hex()}?relay={"&".join(relays)}'
-
-
 async def main(args):
     """
         This is set to work where we create the connection string, there is another method where the client that
@@ -216,13 +212,13 @@ async def main(args):
             my_auth = AuthoriseAll(verbose=verbose)
             print(f'operations will always be authorised')
 
-        # print out the information needed to connect
-        print(f'connect with: {make_connect_str(user_k, relays)}')
-
         my_sign_con = NIP46ServerConnection(signer=BasicKeySigner(key=user_k),
                                             comm_k=None,
-                                            relay=relays[0],
+                                            relay=relays,
                                             authoriser=my_auth)
+
+        # print out the information needed to connect
+        print(f'connect with: {await my_sign_con.bunker_url}')
 
         def sigint_handler(signal, frame):
             my_sign_con.end()
