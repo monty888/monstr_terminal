@@ -94,7 +94,6 @@ async def get_from_config(config,
     if config['user'] is not None:
         user_key = (await get_keys_from_str(config['user'],
                                             private_only=False,
-                                            single_only=True,
                                             key_store=key_store))[0]
         # if we were given a private key then we can create a basic signer
         # so in future this could be something else e.g something external like nsec bunker
@@ -130,7 +129,6 @@ async def get_from_config(config,
     if config['view_extra']:
         view_keys = (await get_keys_from_str(config['view_extra'],
                                              private_only=False,
-                                             single_only=False,
                                              key_store=key_store))
 
         view_ps = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in view_keys],
@@ -144,7 +142,6 @@ async def get_from_config(config,
         # NOTE without user we can only see plain texts in this account
         inbox_keys = (await get_keys_from_str(config['via'],
                                               private_only=True,
-                                              single_only=False,
                                               key_store=key_store))
         # look up inbox profiles, only done to see if they have a name other than using the pubk
         inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],

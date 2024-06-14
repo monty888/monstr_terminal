@@ -6,10 +6,9 @@ import sys
 import signal
 import argparse
 from pathlib import Path
-from monstr.encrypt import Keys, DecryptionException
-from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store
+from monstr.encrypt import DecryptionException
+from monstr_terminal.util import load_toml, get_sqlite_key_store, get_signers_from_str
 from monstr.util import ConfigError
-from monstr.signing.signing import BasicKeySigner
 from monstr.signing.nip46 import NIP46ServerConnection, NIP46AuthoriseInterface
 
 # work dir, we'll try and create if it doesn't exist
@@ -146,7 +145,7 @@ def get_args() -> dict:
               dir=ret['work_dir'],
               current_args=ret)
     # # 2pass so that cmdline options override conf file options
-    # ret.update(get_cmdline_args(ret))
+    ret.update(get_cmdline_args(ret))
 
     # if debug flagged enable now
     if ret['debug'] is True:
@@ -158,7 +157,7 @@ def get_args() -> dict:
         exit(1)
 
     # force get a user
-    if not ret['user']:
+    if not ret['user'] or ret['user'] == '?':
         ret['user'] = input('as user: ')
 
     auth = ret['auth'].lower()
@@ -189,9 +188,8 @@ async def main(args):
                                          password=args['keystore']['password'])
 
         # user we're signing for
-        user_k = (await get_keys_from_str(keys=args['user'],
-                                          private_only=True,
-                                          key_store=key_store))[0]
+        user_sign = (await get_signers_from_str(keys=args['user'],
+                                                key_store=key_store))[0]
 
         # relays to attach to
         relays = args['relay'].split(',')
@@ -212,8 +210,7 @@ async def main(args):
             my_auth = AuthoriseAll(verbose=verbose)
             print(f'operations will always be authorised')
 
-        my_sign_con = NIP46ServerConnection(signer=BasicKeySigner(key=user_k),
-                                            comm_k=None,
+        my_sign_con = NIP46ServerConnection(signer=user_sign,
                                             relay=relays,
                                             authoriser=my_auth)
 
@@ -231,8 +228,7 @@ async def main(args):
         # if comm_k is not None:
         #     await my_sign_con.request_connect()
 
-        while True:
-            await asyncio.sleep(0.1)
+        await my_sign_con.run()
 
     except ConfigError as ce:
         print(ce)
