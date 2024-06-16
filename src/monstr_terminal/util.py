@@ -70,20 +70,15 @@ async def get_key_from_str(key: str,
     return ret
 
 
-async def get_signers_from_str(keys: str, key_store: KeystoreInterface = None) -> [SignerInterface]:
-    if ',' in keys:
-        key_arr = keys.split(',')
-    else:
-        key_arr = [keys]
+async def get_signer_from_str(key: str,
+                              key_store: KeystoreInterface = None) -> SignerInterface:
 
-    ret = []
-    for c_key_str in key_arr:
-        if c_key_str.startswith('bunker://'):
-            ret.append(NIP46Signer(c_key_str, auto_start=True))
-        else:
-            ret.append(BasicKeySigner(await get_key_from_str(key=c_key_str,
-                                                             key_store=key_store,
-                                                             private_only=True)))
+    if key.lower().startswith('bunker://'):
+        ret = NIP46Signer(key, auto_start=True)
+    else:
+        ret = BasicKeySigner(await get_key_from_str(key=key,
+                                                    key_store=key_store,
+                                                    private_only=True))
 
     return ret
 

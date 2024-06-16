@@ -17,7 +17,7 @@ from monstr.encrypt import Keys
 from monstr.signing.signing import SignerInterface, BasicKeySigner
 from monstr.event.event import Event
 from monstr_terminal.cmd_line.util import FormattedEventPrinter, JSONPrinter, ContentPrinter
-from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store
+from monstr_terminal.util import load_toml, get_keys_from_str, get_sqlite_key_store, get_signer_from_str
 
 # defaults if not otherwise given
 # working directory it'll be created it it doesn't exist
@@ -82,7 +82,7 @@ async def get_from_config(config,
     all_view = []
     view_extra = []
     view_contact = []
-    inbox_keys = []
+    inbox_sign = []
     tags = config['tags']
     contacts = config['contacts']
 
@@ -92,15 +92,19 @@ async def get_from_config(config,
 
     # user we're viewing as
     if config['user'] is not None:
-        user_key = (await get_keys_from_str(config['user'],
-                                            private_only=False,
-                                            key_store=key_store))[0]
-        # if we were given a private key then we can create a basic signer
-        # so in future this could be something else e.g something external like nsec bunker
-        # or hardware device (though that'd probably be pain just for viewing unless it
-        # let you batch accept decrypts)
-        if user_key.private_key_hex():
-            as_sign = BasicKeySigner(user_key)
+        as_sign = None
+        try:
+            as_sign = await get_signer_from_str(key=config['user'],
+                                                key_store=key_store)
+        except ConfigError as ce:
+            pass
+
+        if as_sign:
+            user_key = Keys(pub_k=await as_sign.get_public_key())
+        else:
+            user_key = (await get_keys_from_str(config['user'],
+                                                private_only=False,
+                                                key_store=key_store))[0]
 
         user = await profile_handler.aget_profile(user_key.public_key_hex(),
                                                   create_missing=False)
@@ -140,11 +144,12 @@ async def get_from_config(config,
     # public inboxes for encrypted messages
     if config['via']:
         # NOTE without user we can only see plain texts in this account
-        inbox_keys = (await get_keys_from_str(config['via'],
-                                              private_only=True,
-                                              key_store=key_store))
+        for ci_k in config['via'].split(','):
+            inbox_sign.append(await get_signer_from_str(key=ci_k,
+                                                        key_store=key_store))
+
         # look up inbox profiles, only done to see if they have a name other than using the pubk
-        inboxes = await profile_handler.aget_profiles(pub_ks=[k.public_key_hex() for k in inbox_keys],
+        inboxes = await profile_handler.aget_profiles(pub_ks=[await k.get_public_key() for k in inbox_sign],
                                                       create_missing=True)
 
         inboxes = inboxes.profiles
@@ -189,7 +194,7 @@ async def get_from_config(config,
         'view_contact': view_contact,
         'view_extra': view_extra,
         # 'inboxes': inboxes,
-        'inbox_keys': inbox_keys,
+        'inbox_sign': inbox_sign,
         'since': get_int_or_none(config['since'], 'since'),
         'until': get_int_or_none(config['until'], 'until'),
         'limit': get_int_or_none(config['limit'], 'limit'),
@@ -789,13 +794,12 @@ async def main(args):
     # actually make into inbox objects
     inboxes = []
 
-    inbox_keys: [Keys] = config['inbox_keys']
-    c_k: Keys
-    for c_k in inbox_keys:
-        n_inbox = Inbox(signer=BasicKeySigner(c_k),
-                        name=profile_handler.get_profile(c_k.public_key_hex()).display_name(),
+    inbox_sign: [Keys] = config['inbox_sign']
+    c_isign: SignerInterface
+    for c_isign in inbox_sign:
+        n_inbox = Inbox(signer=c_isign,
+                        name=profile_handler.get_profile(await c_isign.get_public_key()).display_name(),
                         use_kind=inbox_kinds)
-
         inboxes.append(n_inbox)
 
     # now set share map on inboxes if so we can see/decrypt encrypted message in them

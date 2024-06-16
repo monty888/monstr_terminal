@@ -12,7 +12,7 @@ from monstr_terminal.cmd_line.post_loop_app import PostAppGui
 from monstr.encrypt import Keys, DecryptionException
 from monstr.signing.signing import BasicKeySigner, SignerInterface
 from monstr.util import util_funcs, ConfigError
-from monstr_terminal.util import load_toml, get_sqlite_key_store
+from monstr_terminal.util import load_toml, get_sqlite_key_store, get_signer_from_str
 from monstr.ident.keystore import KeystoreInterface
 """
     TODO: add support for NIP44 encryption 
@@ -33,21 +33,20 @@ CONFIG_FILE = 'poster.toml'
 INBOX_KIND = Event.KIND_ENCRYPT
 
 
-async def create_key(key_val: str, for_desc: str, key_store: KeystoreInterface = None) -> Keys:
-    ret = Keys.get_key(key_val)
-    if ret is None and key_store:
-        ret = await key_store.get(key_val)
-
-    if ret is None:
-        raise ConfigError(f'unable to create {for_desc} keys using - {key_val}')
-
-    if ret.private_key_hex() is None:
-        raise ConfigError(f'unable to create {for_desc} private keys using - {key_val}')
-    return ret
+# async def create_key(key_val: str, for_desc: str, key_store: KeystoreInterface = None) -> Keys:
+#     ret = Keys.get_key(key_val)
+#     if ret is None and key_store:
+#         ret = await key_store.get(key_val)
+#
+#     if ret is None:
+#         raise ConfigError(f'unable to create {for_desc} keys using - {key_val}')
+#
+#     if ret.private_key_hex() is None:
+#         raise ConfigError(f'unable to create {for_desc} private keys using - {key_val}')
+#     return ret
 
 
 async def get_user_signer(user: str,
-                          for_desc: str = None,
                           key_store: KeystoreInterface = None) -> SignerInterface:
 
     # special ?, we'll just create some random keys to post as
@@ -56,9 +55,7 @@ async def get_user_signer(user: str,
         ret = BasicKeySigner(adhoc_k)
         print(f'created adhoc key for {for_desc} - {adhoc_k.private_key_bech32()}')
     else:
-        ret = BasicKeySigner(await create_key(key_val=user,
-                                              for_desc=for_desc,
-                                              key_store=key_store))
+        ret = await get_signer_from_str(key=user, key_store=key_store)
 
     return ret
 
@@ -508,7 +505,6 @@ async def main(args):
     # user to sign are post events, eventually this might be NIP46 client
     # (we don't have the keys locally)
     user_signer = await get_user_signer(user=user,
-                                        for_desc='user',
                                         key_store=key_store)
 
     # to keys, opt for plain text but required if we're encrypting
@@ -519,7 +515,6 @@ async def main(args):
     inbox_signer = None
     if inbox:
         inbox_signer = await get_user_signer(user=inbox,
-                                             for_desc='inbox',
                                              key_store=key_store)
 
     if loop is False:

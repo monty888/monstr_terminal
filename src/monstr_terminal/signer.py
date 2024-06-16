@@ -7,7 +7,7 @@ import signal
 import argparse
 from pathlib import Path
 from monstr.encrypt import DecryptionException
-from monstr_terminal.util import load_toml, get_sqlite_key_store, get_signers_from_str
+from monstr_terminal.util import load_toml, get_sqlite_key_store, get_signer_from_str
 from monstr.util import ConfigError
 from monstr.signing.nip46 import NIP46ServerConnection, NIP46AuthoriseInterface
 
@@ -188,8 +188,8 @@ async def main(args):
                                          password=args['keystore']['password'])
 
         # user we're signing for
-        user_sign = (await get_signers_from_str(keys=args['user'],
-                                                key_store=key_store))[0]
+        user_sign = await get_signer_from_str(key=args['user'],
+                                              key_store=key_store)
 
         # relays to attach to
         relays = args['relay'].split(',')
