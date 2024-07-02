@@ -6,7 +6,7 @@ from toml import TomlDecodeError
 import os
 from monstr.encrypt import Keys
 from monstr.util import ConfigError
-from monstr.ident.keystore import SQLiteKeyStore, KeyDataEncrypter, KeystoreInterface
+from monstr.ident.keystore import SQLiteKeyStore, NIP49KeyDataEncrypter, KeystoreInterface
 from monstr.signing.signing import SignerInterface, BasicKeySigner
 from monstr.signing.nip46 import NIP46Signer
 from getpass import getpass
@@ -107,12 +107,12 @@ async def get_keys_from_str(keys: str,
 def get_sqlite_key_store(db_file, password: str = None):
     # human alias to keys
     # keystore for user key aliases
-    async def get_key() -> str:
+    async def get_password() -> str:
         ret = password
         if password is None:
-            ret =  getpass('keystore key: ')
+            ret = getpass('keystore key: ')
         return ret
 
-    key_enc = KeyDataEncrypter(get_key=get_key)
+    key_enc = NIP49KeyDataEncrypter(get_password=get_password)
     return SQLiteKeyStore(file_name=db_file,
                           encrypter=key_enc)

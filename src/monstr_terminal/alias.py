@@ -26,10 +26,9 @@ import logging
 import asyncio
 import sys
 import argparse
-from getpass import getpass
 from pathlib import Path
 from monstr.util import ConfigError
-from monstr.ident.keystore import NamedKeys, SQLiteKeyStore, KeystoreInterface, KeyDataEncrypter
+from monstr.ident.keystore import NamedKeys, SQLiteKeyStore, KeystoreInterface
 from monstr.encrypt import Keys, DecryptionException
 from monstr_terminal.util import load_toml, get_sqlite_key_store
 
