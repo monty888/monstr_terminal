@@ -9,7 +9,7 @@ from pathlib import Path
 from monstr.encrypt import DecryptionException
 from monstr_terminal.util import load_toml, get_sqlite_key_store, get_signer_from_str
 from monstr.util import ConfigError
-from monstr.signing.nip46 import NIP46ServerConnection, NIP46AuthoriseInterface
+from monstr.signing.nip46 import NIP46ServerConnection, AuthoriseAll, RequestAuthorise, TimedAuthorise
 
 # work dir, we'll try and create if it doesn't exist
 WORK_DIR = f'{Path.home()}/.nostrpy/'
@@ -29,51 +29,54 @@ USER = None
 VERBOSE = False
 
 
-def print_auth_info(method:str, params:dict):
+async def print_auth_info(method:str, id: str, params:dict):
     print('method', method)
     print('params', params)
 
+async def request_auth(method:str, id: str, params:dict) -> bool:
+    accept = await aioconsole.ainput('authorise y/n? ')
+    return accept.lower() == 'y'
 
-class AuthoriseAll(NIP46AuthoriseInterface):
-
-    def __init__(self, verbose: bool = False):
-        self._verbose = verbose
-
-    async def authorise(self, method: str, id: str, params: [str]) -> bool:
-        if self._verbose:
-            print_auth_info(method, params)
-        return True
-
-
-class BooleanAuthorise(NIP46AuthoriseInterface):
-
-    async def authorise(self, method: str, id: str, params: [str]) -> bool:
-        # always verbose
-        print_auth_info(method, params)
-        accept = await aioconsole.ainput('authorise y/n? ')
-        return accept.lower() == 'y'
-
-
-class TimedAuthorise(BooleanAuthorise):
-
-    def __init__(self, auth_mins = 10, verbose: bool = False):
-        self._last_auth_at = None
-        self._auth_delta = datetime.timedelta(minutes=auth_mins)
-        self._verbose = verbose
-
-    async def authorise(self, method: str, id: str, params: [str]) -> bool:
-        if self._verbose:
-            print_auth_info(method, params)
-        now = datetime.datetime.now()
-        ret = True
-
-        # maybe we need to reauth?
-        if self._last_auth_at is None or (now - self._last_auth_at) > self._auth_delta:
-            ret = await super().authorise(method, id, params)
-            if ret:
-                self._last_auth_at = now
-
-        return ret
+# class AuthoriseAll(NIP46AuthoriseInterface):
+#
+#     def __init__(self, verbose: bool = False):
+#         self._verbose = verbose
+#
+#     async def authorise(self, method: str, id: str, params: [str]) -> bool:
+#         if self._verbose:
+#             print_auth_info(method, params)
+#         return True
+#
+#
+# class BooleanAuthorise(NIP46AuthoriseInterface):
+#
+#     async def authorise(self, method: str, id: str, params: [str]) -> bool:
+#         # always verbose
+#         print_auth_info(method, params)
+#         accept = await aioconsole.ainput('authorise y/n? ')
+#         return accept.lower() == 'y'
+#
+#
+# class TimedAuthorise(BooleanAuthorise):
+#
+#     def __init__(self, auth_mins = 10, verbose: bool = False):
+#         self._last_auth_at = None
+#         self._auth_delta = datetime.timedelta(minutes=auth_mins)
+#         self._verbose = verbose
+#
+#     async def authorise(self, method: str, id: str, params: [str]) -> bool:
+#         if self._verbose:
+#             print_auth_info(method, params)
+#         now = datetime.datetime.now()
+#         ret = True
+#
+#         # maybe we need to reauth?
+#         if self._last_auth_at is None or (now - self._last_auth_at) > self._auth_delta:
+#             ret = await super().authorise(method, id, params)
+#             if ret:
+#                 self._last_auth_at = now
+#
+#         return ret
 
 
 def get_cmdline_args(args) -> dict:
@@ -196,18 +199,25 @@ async def main(args):
 
         # print info about events as we auth
         verbose = args['verbose']
+        auth_info = None
+        if verbose:
+            auth_info = print_auth_info
+
 
         # create the authoriser if any, this decide how we ask user to proceed on requests for sign ops
         auth_type = args['auth']
 
         if auth_type == 'ask':
             print('all operations will require manual authorisation')
-            my_auth = BooleanAuthorise()
+            my_auth = RequestAuthorise(auth_info=auth_info,
+                                       request_auth=request_auth)
         elif isinstance(auth_type, int):
-            my_auth = TimedAuthorise(auth_mins=auth_type, verbose=verbose)
+            my_auth = TimedAuthorise(auth_mins=auth_type,
+                                     request_auth=request_auth,
+                                     auth_info=auth_info)
             print(f'operations will require manual authorisation every {auth_type} minutes')
         else:
-            my_auth = AuthoriseAll(verbose=verbose)
+            my_auth = AuthoriseAll(auth_info=auth_info)
             print(f'operations will always be authorised')
 
         my_sign_con = NIP46ServerConnection(signer=user_sign,
